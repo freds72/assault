@@ -47,44 +47,43 @@ function make_memspr(sx,sy,w,h,tc)
    end
   end,
   draw=function(self,x,y)
-   -- dword boundary
-   local ix=8*flr(x/8)
+    -- dword boundary
+    local ix=8*flr(x/8)
   	local shift=shl(x-ix,2)
   	local bmask=lshr(0xffff.ffff,shift)  
-   for j=0,h-1 do
-    local v0mask,v0=0xffff.ffff
-    local py=y+8*j
-	   for i=0,w-1 do
-	   	local v1,v1mask=rotr(s[w*j+i],shift),rotr(smask[w*j+i],shift)
-				 -- back color
-			  local c=0x7777.7777
-					-- mix with previous sprite image
-					local vmask=bor(
-					 band(v1mask,bmask),
-						band(v0mask,bnot(bmask)))
-					local v=bor(
-					 band(v1,bmask),
-						band(v0,bnot(bmask)))
-  	  -- merge with back color
-  	  v=bor(
-  	  	band(c,vmask),
-  	  	band(v,bnot(vmask)))
-  	 
-  	 	--[[
-  	  local sx,sy=ix+i*8,y+j
-	    pset(sx,sy,lshr(v,12))
-	    pset(sx+1,sy,lshr(v,8))
-	    pset(sx+2,sy,lshr(v,4))
-	    pset(sx+3,sy,v)
-	    pset(sx+4,sy,shl(v,4))
-	    pset(sx+5,sy,shl(v,8))
-	    pset(sx+6,sy,shl(v,12))
-	    pset(sx+7,sy,shl(v,16))
-					]]
-	   	--print(tostr(bor(band(v1,bmask),band(v0,bnot(bmask))),true).."["..tostr(bnot(bmask),true).."]",x+i*100,py,7)
-	   	v0,v0mask=v1,v1mask
-				end
-			end   
+    for j=0,h-1 do
+      local v0mask,v0=0xffff.ffff
+      local py=y+8*j
+      for i=0,w-1 do
+        local v1,v1mask=rotr(s[w*j+i],shift),rotr(smask[w*j+i],shift)
+          -- back color
+        local c=0x7777.7777
+        -- mix with previous sprite image
+        local vmask=bor(
+          band(v1mask,bmask),
+          band(v0mask,bnot(bmask)))
+        local v=bor(
+          band(v1,bmask),
+          band(v0,bnot(bmask)))
+        -- merge with back color
+        v=bor(
+          band(c,vmask),
+          band(v,bnot(vmask)))
+
+        local sx,sy=ix+i*8,y+j
+        pset(sx,sy,lshr(v,12))
+        pset(sx+1,sy,lshr(v,8))
+        pset(sx+2,sy,lshr(v,4))
+        pset(sx+3,sy,v)
+        pset(sx+4,sy,shl(v,4))
+        pset(sx+5,sy,shl(v,8))
+        pset(sx+6,sy,shl(v,12))
+        pset(sx+7,sy,shl(v,16))
+
+        --print(tostr(bor(band(v1,bmask),band(v0,bnot(bmask))),true).."["..tostr(bnot(bmask),true).."]",x+i*100,py,7)
+        v0,v0mask=v1,v1mask
+        end
+      end   
   end
  }
 end
