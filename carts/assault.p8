@@ -121,9 +121,8 @@ function make_memspr(sx,sy,w,h,tc)
 			-- dword boundary
 			local ix=8*flr(x/8)
 			-- localize globals
-			local s,smask,shift,srcx,dstx=s,smask,shl(flr(x)-ix,2),0,flr(x/8)+256*flr(y)
-			local bmask=lshr(0xffff.ffff,shift)
-			local backup={}
+			local w,s,smask,shift,srcx,dstx=w,s,smask,shl(flr(x)-ix,2),0,flr(x/8)+256*flr(y)
+			local backup,bmask={},lshr(0xffff.ffff,shift)
 			for j=0,h-1 do
 				local v0mask,v0=0xffff.ffff
 				for i=0,w-1 do
@@ -187,19 +186,16 @@ end
 
 local bullet=make_memspr(16,32,8,8)
 local parts={}
-function update_parts()
+function update_parts(m)
 	for i=1,#parts do
 		local p=parts[i]
+		-- clear previous position
+		restoremap(p.cache,m)
 		p.x+=0.2		
 	end
 end
-function clear_parts(m)
-	for i=1,#parts do
-		restoremap(parts[i].cache,m)
-	end
-end
 function draw_parts(m)
-	for i=1,#parts do
+	for i=#parts,1,-1 do
 		local p=parts[i]
 		p.cache=p.spr:draw(m,p.x,p.y)
 	end
@@ -235,7 +231,7 @@ function _init()
 	end
 
 	-- test particules
-	for i=0,32 do
+	for i=0,64 do
 		make_part(bullet,rnd(16),(i%32)*8)
 	end
 end
@@ -267,8 +263,7 @@ function _update()
  	plyr.z=1--max(1,plyr.z+plyr.dz)
  	plyr.dz-=0.002
 
-	clear_parts(_texmap)
-	update_parts()
+	update_parts(_texmap)
 	draw_parts(_texmap)
 
 end
