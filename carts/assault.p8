@@ -101,6 +101,21 @@ function rspr(sx,sy,w,a,tc)
 	return s
 end
 
+function make_hitmask(sx,sy,sw,sh,tc)
+	assert(flr(sw/32)<=1,"32+pixels wide sprites not yet supported")
+	tc=tc or 0
+	local bitmask={}
+	for j=0,sh-1 do
+		local bits=0
+		for i=0,sw-1 do
+			local c=sget(sx+i,sy+j)
+			if(c!=tc) bits=bor(bits,lshr(0x8000,i))  
+		end
+		bitmask[j]=bits
+	end
+	return bitmask
+end
+
 -- in-memory sprite
 -- includes support for rotated sprites
 function make_memspr(sx,sy,w,h,nangles,tc)
@@ -108,19 +123,22 @@ function make_memspr(sx,sy,w,h,nangles,tc)
 	-- transparent color
 	tc=tc or 0
 
+	-- rotated versions
 	local angles={}
 	for i=0,nangles-1 do
 		local a=i/nangles-0.25
 		local spr=rspr(sx,sy,flr(w/8),a,tc)
 
 		-- convert sprite to 8 pixel dword's
-		local s,smask,dw={},{},0
+		local s,smask,hitmask,dw={},{},{},0		
 		for y=0,h-1 do
-			local mask,b,bmask=0x1000
+			local mask,hitb,b,bmask=0x1000,0
 			for x=0,w-1 do
 				local c=spr[x+y*w]
 				b=bor(b or 0,c*mask)
 				bmask=bor(bmask or 0,(c==tc and 0xf or 0)*mask)
+				-- warn: works only for up to 32 pixel wide sprites
+				if(c!=tc) hitb=bor(hitb,lshr(0x8000,x))
 				-- shift to next row
 				mask=lshr(mask,4)
 				if mask==0 then
@@ -136,13 +154,15 @@ function make_memspr(sx,sy,w,h,nangles,tc)
 			-- dword padding
 			s[dw],smask[dw]=0,0xffff.ffff
 			dw+=1
+			-- hitmask
+			hitmask[y]=hitb
 		end	
 
-		angles[i]={s=s,smask=smask}
+		angles[i]={s=s,smask=smask,hitmask=hitmask}
 	end		
 
 	-- default sprite
-	local s,smask=angles[0].s,angles[0].smask
+	local s,smask,hitmask=angles[0].s,angles[0].smask,angles[0].hitmask
 
 	-- width in dword unit+padding
 	w=flr(w/8)+1
@@ -151,7 +171,11 @@ function make_memspr(sx,sy,w,h,nangles,tc)
 		rotate=function(self,angle)
 			-- select sprite cache entry
 			local cache=angles[flr(nangles*((angle%1+1)%1))]
-			s,smask=cache.s,cache.smask
+			s,smask,hitmask=cache.s,cache.smask,cache.hitmask
+
+			-- test
+
+			self.hitmask=cache.hitmask
 		end,
 		draw=function(self,dst,x,y,blink)
 
@@ -309,10 +333,13 @@ function make_part(sx,sy,kind,x,y,z,dx,dy,dz)
 		x=x,
 		y=y,
 		z=z,
+		h=8,
 		w=8,
 		dx=dx or 0,
 		dy=dy or 0,
-		dz=dz or 0
+		dz=dz or 0,
+		-- todo: only for relevant particles
+		hitmask=make_hitmask(sx,sy,8,8)
 	})	
 end
 
@@ -486,15 +513,63 @@ function _update()
 	update_parts(_texmap)
 end
 
+function intersect_bitmasks(a,b,x,ymin,ymax)
+	local by=flr(8*a.y)-flr(8*b.y)
+	for y=ymin,ymax do
+	 -- out of boud b mask returns nil
+	 -- nil is evaluated as zero :]
+		if(band(a.hitmask[y],lshr(b.hitmask[by+y],x))!=0) return true		
+	end
+end
+
+function collide(a,b)
+	-- a is left most
+	if(a.x>b.x) a,b=b,a
+	-- screen coords
+	local ax,ay,bx,by=flr(8*a.x),flr(8*a.y),flr(8*b.x),flr(8*b.y)
+	local xmax,ymax=bx+b.w,by+b.h
+	if ax<xmax and 
+	 ax+a.w>bx and
+	 ay<ymax and
+	 ay+a.w>by then
+	 -- collision coords in a space
+ 	return true,a,b,bx-ax,max(by-ay),min(by+b.h,ay+a.h)-ay
+	end
+end
+
+
 local red_blink={0,1,2,2,8,8,8,2,2,1}
 local turret=make_memspr(96,32,32,32,32)
 local c0,c1={},{}
+
+function draw_bitmask(bits,x,y,c)
+ color(c)
+ local ix=32*flr(x/32)
+ for j,b in pairs(bits) do
+  -- shift to x
+ 	b=lshr(b,x%32)
+ 	for i=0,31 do
+ 		if(band(lshr(0x8000,i),b)!=0) pset(ix+i,y+j,c)
+  end
+ end
+end
+
 function _draw()
 
 	--
 	restoremap(c0,_texmap)
 	turret:rotate(atan2(11.5-plyr.x,-12.5+plyr.y)+0.5)
-	c0=turret:draw(_texmap,8*10,8*11,true)
+
+	local col,a,b,x0,y0,y1,blink
+	for _,p in pairs(parts) do
+		col,a,b,x0,y0,y1=collide(p,{x=10,y=11,w=32,h=32,hitmask=turret.hitmask})
+		if col and intersect_bitmasks(a,b,x0,y0,y1) then
+			blink=true
+			break
+		end	
+	end
+
+	c0=turret:draw(_texmap,8*10,8*11,blink)
 
 	restoremap(c1,_texmap)
 	turret:rotate(atan2(17.5-plyr.x,-12.5+plyr.y)+0.5)
@@ -509,6 +584,11 @@ function _draw()
 	spr(96,56,56,2,2)
 
 	draw_parts(_texmap)
+
+	if col then
+		draw_bitmask(a.hitmask,0,0,7)
+ 		draw_bitmask(b.hitmask,x0,flr(8*b.y)-flr(8*a.y),7)
+	end
 
 	--line(64,64,64+16*ca,64+16*sa,11)
 	--line(64,64,64-16*sa,64+16*ca,8)
