@@ -414,7 +414,7 @@ function _update()
 	local dx,dy=cos(-plyr.angle-0.75),sin(-plyr.angle-0.75)
 	if btnp(5) then
 		-- airborne?
-		if plyr.z>1 then
+		if plyr.nuke_mode then
 			make_part(16,48,1,plyr.x,plyr.y,plyr.z,dx/2,dy/2)
 
 			-- marker
@@ -460,6 +460,8 @@ function _update()
 		-- actvivate
 		if j and j>0 and plyr.z==1 then
 			plyr.dz=0.05
+			plyr.nuke_mode=true
+
 			-- 
 			jumppads[i]-=1
 		end
@@ -467,10 +469,12 @@ function _update()
 
 	plyr.z+=plyr.dz
 	plyr.dz-=0.002
-	if plyr.z<1 and abs(plyr.dz)>0.05 then
-		-- bounce
-		plyr.dz=0.015
-	elseif plyr.z<1 then
+	if plyr.z<1 then
+		if abs(plyr.dz)>0.05 then
+			plyr.nuke_mode=nil
+			-- bounce
+			plyr.dz=0.015
+		end
 		plyr.dz=0
 	end
 	plyr.z=max(1,plyr.z)
