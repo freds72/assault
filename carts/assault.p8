@@ -242,22 +242,30 @@ local jumppads={}
 function make_plyr(x,y,z,angle)
 	local acc,da,dz=0,0,0
 	local states,state,nuke_mode
+	local sprite=96
 	-- create states
 	states={
 		drive=function()
 			local ttl=0
 			z,dz,nuke_mode=1,0
 			return function(self)
+				-- flip?
+				if btn(4) then
+					if(btn(0)) state=states.flip(-1) return
+					if(btn(1)) state=states.flip(1) return
+				end
+
+				-- regular drive
+				if(btn(2)) acc+=0.02
+				if(btn(3)) acc-=0.02
+			
+				-- rotation
 				if(btn(0)) da=-0.01
 				if(btn(1)) da=0.01
 				
 				angle+=da
-
-				-- apply thrust force
 				local ca,sa=cos(angle),sin(angle)
-				if(btn(2)) acc+=0.02
-				if(btn(3)) acc-=0.02
-			
+
 				local dx,dy=-sa*acc,-ca*acc
 				
 				-- get tile
@@ -298,7 +306,27 @@ function make_plyr(x,y,z,angle)
 				acc*=0.85	
 			end
 		end,
-		flip=function(self,dir)
+		flip=function(dir)
+			local ttl=20
+			local ca,sa=cos(angle),sin(angle)
+			local dx,dy=0.1*ca*dir,-0.1*sa*dir
+			-- stop fwd & rotation
+			acc,da=0,0
+			return function(self)
+				ttl-=1
+				if(ttl<0) state=states.drive() return
+
+				-- get tile
+				self.x,self.y=x,y
+				local xarea,yarea=get_area(self,dx,0),get_area(self,0,dy,0)
+				-- solid?
+				if band(xarea,0x1)==0 then
+					x+=dx
+				end
+				if band(yarea,0x1)==0 then
+					y+=dy
+				end
+			end
 		end,
 		airborne=function()
 			local ttl=0
