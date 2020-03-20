@@ -237,17 +237,200 @@ end
 
 -- game
 local time_t=0
-local plyr={
- 	x=28,y=22,z=2,
- 	dz=-0.01,
-	acc=0,
-	angle=0,
-	da=0,
-	w=0.4,
-	h=0.4,
-	sx=48,
-	sy=0
-}
+local jumppads={}
+
+function make_plyr(x,y,z,angle)
+	local acc,da,dz=0,0,0
+	local states,state,nuke_mode
+	local sprite=96
+	local flip_left={128,130,132}
+	local flip_right={132,130,128}
+	local bullet_ttl=0
+
+	-- shared fire bullet routine
+	function fire_bullet(ca,sa)
+			if btn(5) and bullet_ttl<0 then
+				make_part(16,56,0,x,y,z,-sa/2,-ca/2)
+				bullet_ttl=10
+			end
+	end
+
+	-- create states
+	states={
+		drive=function()
+			local ttl=0
+			sprite,z,dz,nuke_mode=96,1,0
+			return function(self)
+				-- flip?
+				if btn(4) then
+					if(btn(0)) state=states.flip(-1) return
+					if(btn(1)) state=states.flip(1) return
+				end
+
+				-- regular drive
+				if(btn(2)) acc+=0.02
+				if(btn(3)) acc-=0.02
+			
+				-- rotation
+				if(btn(0)) da=-0.01
+				if(btn(1)) da=0.01
+				
+				angle+=da
+				local ca,sa=cos(angle),sin(angle)
+
+				local dx,dy=-sa*acc,-ca*acc
+				
+				-- get tile
+				self.x,self.y=x,y
+				local xarea,yarea=get_area(self,dx,0),get_area(self,0,dy,0)
+				-- solid?
+				if band(xarea,0x1)==0 then
+					x+=dx
+				end
+				if band(yarea,0x1)==0 then
+					y+=dy
+				end
+				-- gravel?
+				local area=bor(xarea,yarea)
+				if band(area,0x2)>0 and abs(acc)>0.1 then
+					cam_shake()
+				-- jumppad
+				elseif band(area,0x4)>0 then
+					local i=bor(flr(x),shl(flr(y),8))
+					local j=jumppads[i]
+					-- actvivate
+					if j and j>0 then
+						dz=0.05
+						state=states.airborne()
+						-- 
+						jumppads[i]-=1
+					end
+				end
+
+				fire_bullet(ca,sa)
+
+				-- friction
+				da*=0.8
+				acc*=0.85	
+			end
+		end,
+		flip=function(dir)
+			local ttl=20
+			local ca,sa=cos(angle),sin(angle)
+			local dx,dy=0.1*ca*dir,-0.1*sa*dir
+			-- stop fwd & rotation
+			acc,da=0,0
+			local sprites=dir==-1 and flip_left or flip_right
+			return function(self)
+				ttl-=1
+				if(ttl<0) state=states.drive() return
+
+				sprite=sprites[flr(#sprites*ttl/20)+1]
+				-- get tile
+				self.x,self.y=x,y
+				local xarea,yarea=get_area(self,dx,0),get_area(self,0,dy,0)
+				-- solid?
+				if band(xarea,0x1)==0 then
+					x+=dx
+				end
+				if band(yarea,0x1)==0 then
+					y+=dy
+				end
+
+				fire_bullet(ca,sa)
+			end
+		end,
+		airborne=function()
+			local ttl=0
+			nuke_mode=true
+			return function()
+				if(btn(0)) da=-0.01
+				if(btn(1)) da=0.01
+				
+				angle+=da
+				z+=dz
+				dz-=0.001
+				if z<1 then
+					state=states.drive()
+					return
+				end
+
+				ttl-=1
+				if btn(5) and z>1.1 and ttl<0 then
+					local dx,dy=cos(-angle-0.75),sin(-angle-0.75)
+					make_part(16,48,1,x,y,z,dx/2,dy/2)
+					-- next nuke
+					ttl=15
+
+					-- marker
+					local ca,sa=cos(angle),sin(angle)		
+					local a,b,c=-0.004/2,0,z-1
+					local d=b*b-4*a*c
+					if d>=0 then
+						local t=(b-sqrt(d))/a/2
+						local marker=make_part(48,47,3,x-0.5*t*sa,y-0.5*t*ca,1)
+						marker.ttl=20
+					end
+				end
+						
+				-- friction
+				da*=0.9
+				acc=0
+			end
+		end,
+		mortar=function()
+			acc=0 
+		end,
+		drop=function()
+			local bounces=2
+			return function()
+				z+=dz
+				dz-=0.001
+				if z<1 then
+					bounces-=1
+					z=1
+					if bounces>0 then
+						dz=abs(dz)/4
+					else
+						state=states.drive()
+					end
+				end
+			end
+		end
+	}
+
+	state=states.drop()
+
+	return {
+		w=0.4,
+		h=0.4,
+		get_pos=function()
+			return x,y,z,angle
+		end,
+		draw=function(self)
+			-- player
+			spr(sprite,56,56,2,2)
+			if nuke_mode then
+				local a,b,c=-0.004/2,0,z-1
+				local d=b*b-4*a*c
+				if d>=0 then
+					local t=(b-sqrt(d))/a/2
+					local sx,sy,w=0,-0.5*t,16/z
+					local dx,dy=64+shl(sx,3),64+shl(sy,3)
+					if(time_t%2==0) sspr(48,32,13,13,dx-6.5,dy-6.5)
+				end
+			end
+		end,
+		update=function(self)
+			bullet_ttl-=1
+			state(self)
+
+			-- kill "ghost" rotation
+			if(abs(da)<0.001) da=0
+		end
+	}
+end
+local plyr=make_plyr(28,22,2,0)
 
 -- in memory map of sprite coords
 local _texmap={}
@@ -304,15 +487,13 @@ function update_parts(m)
 		end
 	end
 end
-
-function draw_parts(m)
-	local ca,sa=cos(plyr.angle),sin(plyr.angle)
-	local x0,y0,z0=plyr.x,plyr.y,plyr.z
+function draw_parts(m,x0,y0,z0,angle)
+	local ca,sa=cos(angle),sin(angle)
 	for _,p in pairs(parts) do
 		local x,y,w=(p.x-x0)/z0,(p.y-y0)/z0,p.w/z0
 		local dx,dy=64+shl(ca*x-sa*y,3)-w/2,64+shl(sa*x+ca*y,3)-w/2
 		if p.draw then
-			p:draw(dx,dy)
+			p:draw(dx,dy,z0)
 		elseif p.kind==3 then
 			local sx,sy,w=48,47,17
 			if(time_t%8<4) sx,sy,w=61,32,13
@@ -409,14 +590,14 @@ function make_nuke(x,y,z)
 		if(t>27) return
 		return self
 	end
-	nuke.draw=function(self,x,y)
+	nuke.draw=function(self,x,y,z)
 		--
 		if t<4 then
 			fade(t)
 		else
 			pal()
-			r0=lerp(r0,45,0.22)/plyr.z
-			r1=lerp(r1,45,0.3)/plyr.z
+			r0=lerp(r0,45,0.22)/z
+			r1=lerp(r1,45,0.3)/z
 			local rr0,rr1=r0*r0,r1*r1
 			if(t>20) fp=lerp(fp,1,0.1)	
 			fillp(dither_pat[flr(fp)]+0x0.ff)
@@ -436,7 +617,6 @@ function make_nuke(x,y,z)
 	end
 end
 
-local jumppads={}
 local npcs={}
 local turret=make_memspr(96,32,32,32,32)
 local tank=make_memspr(0,32,16,16,16)
@@ -474,100 +654,7 @@ function _update()
 	time_t+=1
 	cam_update()
 
-	if not plyr.flipping then
-		if(btn(0)) plyr.da=-0.01
-		if(btn(1)) plyr.da=0.01
-	end
-		
-	plyr.angle+=plyr.da
-
-	-- friction
-	plyr.da*=0.8
-	plyr.acc*=0.92
-
-	-- kill "ghost" rotation
-	if(abs(plyr.da)<0.001) plyr.da=0
-
-	local dx,dy=cos(-plyr.angle-0.75),sin(-plyr.angle-0.75)
-	if btnp(5) then
-		-- airborne?
-		if plyr.nuke_mode then
-			make_part(16,48,1,plyr.x,plyr.y,plyr.z,dx/2,dy/2)
-
-			-- marker
-			local ca,sa=cos(plyr.angle),sin(plyr.angle)		
-			local a,b,c=-0.004/2,0,plyr.z-1
-			local d=b*b-4*a*c
-			if d>=0 then
-				local t=(b-sqrt(d))/a/2
-				local x0,y0,z0=plyr.x,plyr.y,plyr.z
-				local marker=make_part(48,47,3,plyr.x-0.5*t*sa,plyr.y-0.5*t*ca,1)
-				marker.ttl=20
-			end
-		
-		else
-			make_part(16,56,0,plyr.x,plyr.y,plyr.z,dx/2,dy/2)
-		end
-	end
-
-
-	-- apply thrust force
-	local dx,dy=cos(plyr.angle),sin(plyr.angle)
-	if btn(4) and (btnp(0) or btnp(1)) then
-		plyr.flipping=true
-		local fx=1
-		if(btnp(0)) fx=-1
-		plyr.fx=fx
-	end
-
-	if not plyr.flipping then
-		if(btn(2)) plyr.acc+=0.02
-		if(btn(3)) plyr.acc-=0.02
-		dx,dy=-dy*plyr.acc,-dx*plyr.acc		
-	else
-		dx*=0.1
-		dy*=0.1
-	end
-
-	-- get tile
-	local xarea,yarea=get_area(plyr,dx,0),get_area(plyr,0,dy,0)
-	-- solid?
-	if band(xarea,0x1)==0 then
-		plyr.x+=dx
-	end
-	if band(yarea,0x1)==0 then
-		plyr.y+=dy
-	end
-	-- gravel?
-	local area=bor(xarea,yarea)
-	if band(area,0x2)>0 and abs(plyr.acc)>0.1 then
-		cam_shake()
-	-- jumppad?
-	elseif band(area,0x4)>0 then
-		local i=bor(flr(plyr.x),shl(flr(plyr.y),8))
-		local j=jumppads[i]
-		-- actvivate
-		if j and j>0 and plyr.z==1 then
-			plyr.dz=0.05
-			plyr.nuke_mode=true
-
-			-- 
-			jumppads[i]-=1
-		end
-	end
-
-	plyr.z+=plyr.dz
-	plyr.dz-=0.001
-	if plyr.z<1 then
-		if abs(plyr.dz)>0.03 then
-			plyr.nuke_mode=nil
-			-- bounce
-			plyr.dz=0.015
-		else
-			plyr.dz=0
-		end
-	end
-	plyr.z=max(1,plyr.z)
+	plyr:update()
 
 	update_parts(_texmap)
 end
@@ -614,12 +701,14 @@ end
 
 function _draw()
 
+	local px,py,pz,pangle=plyr:get_pos()
+
 	for i=#npcs,1,-1 do
 		local npc=npcs[i]
 		restoremap(npc.cache,_texmap)
 
 		-- select correct hitmask
-		npc.angle=atan2(npc.x-plyr.x,-npc.y+plyr.y)
+		npc.angle=atan2(npc.x-px,-npc.y+py)
 		npc.spr:rotate(npc.angle)
 
 		npc.hitmask=npc.spr.hitmask
@@ -668,16 +757,12 @@ function _draw()
 	end
 	]]
 
-
 	-- rotating map
-	rsprtexmap(_texmap,8*plyr.x+shkx,8*plyr.y+shky,plyr.z,plyr.angle)	
+	rsprtexmap(_texmap,8*px+shkx,8*py+shky,pz,pangle)	
 
-	local ca,sa=cos(plyr.angle),sin(plyr.angle)
+	plyr:draw()
 
-	-- player
-	spr(96,56,56,2,2)
-
-	draw_parts(_texmap)
+	draw_parts(_texmap,px,py,pz,pangle)
 
 	--[[
 	if col then
@@ -688,17 +773,6 @@ function _draw()
 	
 	--line(64,64,64+16*ca,64+16*sa,11)
 	--line(64,64,64-16*sa,64+16*ca,8)
-
-	local a,b,c=-0.004/2,0,plyr.z-1
-	local d=b*b-4*a*c
-	if d>=0 and plyr.nuke_mode then
-		local t=(b-sqrt(d))/a/2
-		local x0,y0,z0=plyr.x,plyr.y,plyr.z
-		local x,y,w=0,-0.5*t,16/z0
-		local dx,dy=64+shl(x,3),64+shl(y,3)
-		if(time_t%2==0) sspr(48,32,13,13,dx-6.5,dy-6.5)
-		--print(a.."\n"..b.."\n"..c.."\nz:"..z0.."\nt:"..t,64+30,64)
-	end
 
 	-- blinking lights
 	pal(8,red_blink[flr((5.3*time())%#red_blink)+1],1) 
