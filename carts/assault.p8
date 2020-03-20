@@ -14,7 +14,8 @@ function rsprtexmap(m,px,py,pz,a)
 	local ddx7,ddy7=7*ca,7*sa
 	ca,sa=cos(a),sin(a)
 	local w=shl(pz,7)
-	px,py=px-w,py-w
+	-- position in texmap space
+	px,py=(px-48*sa*pz)-w,(py-48*ca*pz)-w
 	local dx0,dy0=(sa-ca)*(w/2-0.5)+w,w-(ca+sa)*(w/2-0.5)
 
 	-- dx/dy: offset in full texmap space (1024x1024)
@@ -385,7 +386,7 @@ function make_plyr(x,y,z,angle)
 			-- stop fwd & rotation
 			acc,da,mortar_angle=0,0,0.05
 			return function()
-				if(mortar_angle<0.01) state=states.drive() return
+				if(mortar_angle<0.02) state=states.drive() return
 
 				if(btn(3)) mortar_angle+=0.01				
 				mortar_angle=mid(mortar_angle*0.95,0,0.2)				
@@ -410,6 +411,7 @@ function make_plyr(x,y,z,angle)
 		end
 	}
 
+	-- initial state
 	state=states.drop()
 
 	return {
@@ -420,7 +422,7 @@ function make_plyr(x,y,z,angle)
 		end,
 		draw=function(self)
 			-- player
-			spr(sprite,56,56,2,2)
+			spr(sprite,56,104,2,2)
 
 			if nuke_mode then
 				local a,b,c=-0.004/2,sin(mortar_angle)*0.05,z-1
@@ -428,7 +430,7 @@ function make_plyr(x,y,z,angle)
 				if d>=0 then
 					local t=(b-sqrt(d))/a/2
 					local sy,w=-0.5*t,16/z
-					local dx,dy=64,64+shl(sy,3)
+					local dx,dy=64,104+shl(sy,3)
 					if(time_t%2==0) sspr(48,32,13,13,dx-6.5,dy-6.5)
 				end
 			end
@@ -503,7 +505,7 @@ function draw_parts(m,x0,y0,z0,angle)
 	local ca,sa=cos(angle),sin(angle)
 	for _,p in pairs(parts) do
 		local x,y,w=(p.x-x0)/z0,(p.y-y0)/z0,p.w/z0
-		local dx,dy=64+shl(ca*x-sa*y,3)-w/2,64+shl(sa*x+ca*y,3)-w/2
+		local dx,dy=64+shl(ca*x-sa*y,3)-w/2,112+shl(sa*x+ca*y,3)-w/2
 		if p.draw then
 			p:draw(dx,dy,z0)
 		elseif p.kind==3 then
@@ -710,7 +712,7 @@ function draw_bitmask(bits,x,y,c)
  end
 end
 
-
+local blasts={}
 function _draw()
 
 	local px,py,pz,pangle=plyr:get_pos()
@@ -726,23 +728,29 @@ function _draw()
 		npc.hitmask=npc.spr.hitmask
 	end
 
+	-- commit blasts to texmap
+	for _,b in pairs(blasts) do
+		blast:draw(_texmap,8*b.x,8*b.y)
+	end
+	blasts={}
+
 	local blink={}
-	for _,p in pairs(parts) do
+	for p in all(parts) do
 		-- todo: align box with display position!
 		local blt={x=p.x-0.5,y=p.y-0.5,w=8,h=8,hitmask=p.hitmask}
 		for npc in all(npcs) do
-			if not npc.static then
-				local col,a,b,x0,y0,y1=collide(blt,npc)
-				if col and intersect_bitmasks(a,b,x0,y0,y1) then
-					--blink[npc]=true
-					del(npcs,npc)
-					local b=make_part(0,0,0,npc.x+npc.w/16,npc.y+npc.h/16,1)
-					b.draw=draw_blast
-					b.ttl=10
+			local col,a,b,x0,y0,y1=collide(blt,npc)
+			if col and intersect_bitmasks(a,b,x0,y0,y1) then
+				--blink[npc]=true
+				del(npcs,npc)
+				del(parts,p)
+				local b=make_part(0,0,0,npc.x+npc.w/16,npc.y+npc.h/16,1)
+				b.draw=draw_blast
+				b.ttl=10
 
-					add(npcs,{x=npc.x,y=npc.y,angle=0,h=16,w=16,spr=blast,cache={}}).static=true
-					break
-				end
+				-- blast crater
+				add(blasts,{x=npc.x,y=npc.y})
+				break
 			end
 		end	
 	end
