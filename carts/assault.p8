@@ -834,8 +834,18 @@ function _draw()
 	-- blinking lights
 	pal(8,red_blink[flr((5.3*time())%#red_blink)+1],1) 
 
-	rectfill(0,0,127,8,1)
-	print(flr(100*stat(1)).."% "..stat(0),2,2,7)
+	prints("score",2,2,14,1)
+
+	local s=tostr(flr(time()))
+	prints(s,30-#s+1,9,7,0)
+
+	--rectfill(0,0,127,8,1)
+	--print(flr(100*stat(1)).."% "..stat(0),2,2,7)
+end
+
+function prints(s,x,y,c,sc)
+	if(sc) print(s,x+1,y+1,sc)
+	print(s,x,y,c)
 end
 
 __gfx__
