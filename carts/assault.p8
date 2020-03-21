@@ -235,26 +235,53 @@ function lerp(a,b,t)
 	return a*(1-t)+t*b
 end
 
+-- pick a value from an array
+-- t must be [0,1[
+function lerpa(a,t)
+	return a[flr(#a*t)+1]
+end
 
 -- game
 local time_t=0
 local jumppads={}
 
 function make_plyr(x,y,z,angle)
-	local acc,da,dz,mortar_angle=0,0,0,0
+	local reload_ttl,reload_nuke_ttl,acc,da,dz,mortar_angle=0,0,0,0,0,0
 	local states,state,nuke_mode
 	local sprite=96
-	local flip_left={128,130,132}
-	local flip_right={132,130,128}
-	local mortar_sprites={96,134,136}
-	local bullet_ttl=0
-
+	local flip_sprites,mortar_sprites={
+		[-1]={128,130,132},
+		[1]={132,130,128}},
+		{96,134,136}
+	
 	-- shared fire bullet routine
 	function fire_bullet(ca,sa)
-			if btn(5) and bullet_ttl<0 then
-				make_part(16,56,0,x,y,z,-sa/2,-ca/2)
-				bullet_ttl=10
+		if btn(5) and reload_ttl<0 then
+			make_part(16,56,0,x,y,z,-sa/2,-ca/2)
+			reload_ttl=10
+		end
+	end
+
+	function fire_nuke()
+		if btn(5) and reload_nuke_ttl<0 then
+			-- nuke velocity
+			local v=0.5
+			-- polar coords
+			local cm,sm=v*cos(mortar_angle),-v*sin(mortar_angle)
+			local ca,sa=cm*cos(angle),cm*sin(angle)
+			make_part(16,48,1,x,y,z,-sa,-ca,sm)
+			-- next nuke
+			reload_nuke_ttl=15
+
+			-- marker
+			local a,b,c=-0.02/2,sm/2,z-1
+			local d=b*b-4*a*c
+			if d>=0 then
+				local t=(b-sqrt(d))/a/2
+				local marker=make_part(48,47,3,x-t*sa,y-t*ca,1)
+				marker.ttl=20
 			end
+		end
 	end
 
 	-- create states
@@ -271,8 +298,8 @@ function make_plyr(x,y,z,angle)
 				end
 
 				-- regular drive
-				if(btn(2)) acc+=0.02
-				if(btn(3)) acc-=0.02
+				if(btn(2)) acc+=0.05
+				if(btn(3)) acc-=0.05
 			
 				-- rotation
 				if(btn(0)) da=-0.01
@@ -314,21 +341,20 @@ function make_plyr(x,y,z,angle)
 
 				-- friction
 				da*=0.8
-				acc*=0.85	
+				acc*=0.7
 			end
 		end,
 		flip=function(dir)
-			local ttl=20
+			local ttl,sprites=20,flip_sprites[dir]
 			local ca,sa=cos(angle),sin(angle)
 			local dx,dy=0.1*ca*dir,-0.1*sa*dir
 			-- stop fwd & rotation
 			acc,da=0,0
-			local sprites=dir==-1 and flip_left or flip_right
 			return function(self)
 				ttl-=1
 				if(ttl<0) state=states.drive() return
 
-				sprite=sprites[flr(#sprites*ttl/20)+1]
+				sprite=lerpa(sprites,ttl/20)
 				-- get tile
 				self.x,self.y=x,y
 				local xarea,yarea=get_area(self,dx,0),get_area(self,0,dy,0)
@@ -357,25 +383,9 @@ function make_plyr(x,y,z,angle)
 					state=states.drive()
 					return
 				end
-
-				ttl-=1
-				if btn(5) and z>1.1 and ttl<0 then
-					local dx,dy=cos(-angle-0.75),sin(-angle-0.75)
-					make_part(16,48,1,x,y,z,dx/2,dy/2)
-					-- next nuke
-					ttl=15
-
-					-- marker
-					local ca,sa=cos(angle),sin(angle)		
-					local a,b,c=-0.004/2,0,z-1
-					local d=b*b-4*a*c
-					if d>=0 then
-						local t=(b-sqrt(d))/a/2
-						local marker=make_part(48,47,3,x-0.5*t*sa,y-0.5*t*ca,1)
-						marker.ttl=20
-					end
-				end
 						
+				fire_nuke()
+
 				-- friction
 				da*=0.9
 				acc=0
@@ -390,7 +400,9 @@ function make_plyr(x,y,z,angle)
 
 				if(btn(3)) mortar_angle+=0.01				
 				mortar_angle=mid(mortar_angle*0.95,0,0.2)				
-				sprite=mortar_sprites[flr(#mortar_sprites*mortar_angle/0.2)+1]
+				sprite=lerpa(mortar_sprites,mortar_angle/0.2)
+
+				fire_nuke()
 			end
 		end,
 		drop=function()
@@ -425,18 +437,20 @@ function make_plyr(x,y,z,angle)
 			spr(sprite,56,104,2,2)
 
 			if nuke_mode then
-				local a,b,c=-0.004/2,sin(mortar_angle)*0.05,z-1
+				-- nuke estimated impact marker
+				local a,b,c=-0.02/2,sin(mortar_angle)*0.5,z-1
 				local d=b*b-4*a*c
 				if d>=0 then
 					local t=(b-sqrt(d))/a/2
-					local sy,w=-0.5*t,16/z
+					local sy,w=-cos(mortar_angle)*0.5*t,16/z
 					local dx,dy=64,104+shl(sy,3)
 					if(time_t%2==0) sspr(48,32,13,13,dx-6.5,dy-6.5)
 				end
 			end
 		end,
 		update=function(self)
-			bullet_ttl-=1
+			reload_ttl-=1
+			reload_nuke_ttl-=1
 			state(self)
 
 			-- kill "ghost" rotation
@@ -475,10 +489,11 @@ function update_parts(m)
 		-- elapsed?
 		if(p.ttl and p.t>=p.ttl) parts[i]=nil break
 
-		local x0,y0=p.x,p.y
-		local x1,y1=x0+p.dx,y0+p.dy
 		-- bullet
 		if p.kind==0 then
+			local x0,y0=p.x,p.y
+			local x1,y1=x0+p.dx,y0+p.dy
+				-- hit wall?
 			if solid(x0,y1) or solid(x1,y0) then
 				parts[i]=nil
 			else
@@ -495,7 +510,7 @@ function update_parts(m)
 				parts[i]=nil
 			end
 			-- gravity
-			p.dz-=0.004
+			p.dz-=0.02
 		elseif p.update then
 			parts[i]=p:update()
 		end
@@ -504,17 +519,23 @@ end
 function draw_parts(m,x0,y0,z0,angle)
 	local ca,sa=cos(angle),sin(angle)
 	for _,p in pairs(parts) do
-		local x,y,w=(p.x-x0)/z0,(p.y-y0)/z0,p.w/z0
-		local dx,dy=64+shl(ca*x-sa*y,3)-w/2,112+shl(sa*x+ca*y,3)-w/2
-		if p.draw then
-			p:draw(dx,dy,z0)
-		elseif p.kind==3 then
-			local sx,sy,w=48,47,17
-			if(time_t%8<4) sx,sy,w=61,32,13
-			sspr(sx,sy,w,w,dx-w/2,dy-w/2)
-		else
-			-- todo: select rotated sprite
-			sspr(p.sx,p.sy,p.w,p.w,dx,dy,w,w)
+		-- actual "depth"
+		local z=p.z-z0+1
+		-- front of cam?
+		if z>0.1 then
+			local x,y,w=(p.x-x0)/z,(p.y-y0)/z,p.w*z
+			local dx,dy=64+shl(ca*x-sa*y,3),112+shl(sa*x+ca*y,3)
+			if p.draw then
+				p:draw(dx-w/2,dy-w/2,z0)
+			elseif p.kind==3 then
+				local sx,sy,w=48,47,17
+				if(time_t%8<4) sx,sy,w=61,32,13
+				sspr(sx,sy,w,w,dx-w/2,dy-w/2)
+			else
+				-- todo: select rotated sprite
+				sspr(p.sx,p.sy,p.w,p.w,dx-w/2,dy-w/2,w,w)
+			end
+			print(z.."\n"..p.dz,dx+8,dy,11)
 		end
 	end
 end
@@ -535,7 +556,6 @@ function draw_blast(p,x,y)
 	palt(0,false)
 	palt(14,true)
 	local cc=circles[flr(t*#circles)+1]
-	assert(cc,t)
 	for i=1,#cc do
 		local c=cc[i]
 		if(c.fp) fillp(c.fp)
@@ -596,9 +616,10 @@ function fade(i)
 	end
 end
 
-function make_nuke(x,y,z)
+function make_nuke(x,y)
 	local r0,r1,fp,t=8,8,#dither_pat,0
-	local nuke=make_part(0,0,2,x,y,z)
+	-- nuke always at floor level
+	local nuke=make_part(0,0,2,x,y,1)
 	nuke.update=function(self)
 		t+=1
 		if(t>27) return
