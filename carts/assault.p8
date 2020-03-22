@@ -183,10 +183,10 @@ function make_memspr(sx,sy,w,h,nangles,tc)
 			-- dword boundary
 			local ix=flr(x/8)
 			-- localize globals
-			local w,s,smask,shift,dx=w,s,smask,shl(flr(x)-8*ix,2),ix+256*flr(y)
+			local w,s,smask,shift,dx=w,s,smask,shl(flr(x)-8*ix,2),ix
 			local backup,bmask={},lshr(0xffff.ffff,shift)
 			for j=0,h-1 do
-				local srcx,dstx,v0mask,v0=j*w,dx+shl(j,8),0xffff.ffff
+				local srcx,dstx,v0mask,v0=j*w,bor(dx,shr(j+flr(y),16)),0xffff.ffff
 				for i=0,w-1 do
 					-- stride (shifted)
 					local v1,v1mask=blink and 0x7777.7777 or rotr(s[srcx],shift),rotr(smask[srcx],shift)						
