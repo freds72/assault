@@ -742,8 +742,6 @@ end
 	
 function _init()
 	_map={}
-	local tiles=0
-	local m0=stat(0)
 	decompress(0x2000,function(s,i,j)
 		if s==0 then
 			if(rnd()>0.2) return
