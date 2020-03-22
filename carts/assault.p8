@@ -693,10 +693,10 @@ function decompress(mem,fn)
 		code[shr(i,16)]={i}
 	end
     local buffer, buffer_bits = 0, 0
-    local index, aux = 0, {}
+    local index = 0
     local prefix = nil
 
-	local x,y,out=0,0,{}
+	local x,y=0,0
 	local len=1006
     while index < len or buffer_bits >= code_bits do
         -- read buffer
@@ -742,14 +742,20 @@ end
 	
 function _init()
 	_map={}
+	local tiles=0
+	local m0=stat(0)
 	decompress(0x2000,function(s,i,j)
-		if(s==0) return
+		if s==0 then
+			if(rnd()>0.2) return
+			s=8+flr(rnd(4))
+		end
 		_map[i+128*j]=s
 
+		--[[
 		if fget(s,2) then
 			jumppads[i+128*j]=3
 		end
-
+		]]
 		local sx,sy=band(shl(s,3),127),shl(flr(s/16),3)
 		for y=0,7 do
 			local b=0
@@ -757,41 +763,17 @@ function _init()
 				b=bor(b,sget(sx+shift,sy+y)*lshr(0x1000.0000,4*shift))
 			end
 			-- use x.y 16:16 for texmap coords
-			_texmap[bor(i,lshr(8*j+y,16))]=b		
+			_texmap[bor(i,lshr(8*j+y,16))]=b
 		end
 	end)
 
-	-- lzw -> bytes
-
-	-- x: 8 pixel blocks
-	-- y: 1 pixel line
-	--[[
-	for j=0,1024-1 do
-		for i=0,127 do
-			-- sprite tile
-			local s=_map[i+flr(j/8)*128]
-			if s then
-				-- jumpad?
-				if fget(s,2) then
-					jumppads[i+256*flr(j/8)]=3
-				end
-				local sx,sy,b=band(shl(s,3),127),shl(flr(s/16),3)+j%8,0
-				for shift=0,7 do
-					b=bor(b,sget(sx+shift,sy)*lshr(0x1000.0000,4*shift))
-				end
-				-- use x.y 16:16 for texmap coords
-				_texmap[bor(i,lshr(j,16))]=b
-			end
-		end
-	end
-	]]
 	-- test particules
 	for i=1,20 do
-		add(npcs,{x=10+rnd(10),y=15+rnd(10),h=16,w=16,spr=tank,cache={}})
+		add(npcs,{x=20+rnd(10),y=57+rnd(10),h=16,w=16,spr=tank,cache={}})
 	end
 	-- turrets
-	add(npcs,{x=10,y=11,h=32,w=32,spr=turret,cache={}})
-	add(npcs,{x=16,y=11,h=32,w=32,spr=turret,cache={}})
+	add(npcs,{x=21,y=33,h=32,w=32,spr=turret,cache={}})
+	add(npcs,{x=28,y=33,h=32,w=32,spr=turret,cache={}})
 end
 
 function _update()
