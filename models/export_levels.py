@@ -148,10 +148,13 @@ for layer in layers:
     lzw = lzw_encode(data)
     print("orig size:{} bytes -> {} bytes".format(len(data),len(lzw)))
     
-    orig = lzw_decode(lzw)
-    print("lzw size:{} bytes -> {} bytes".format(len(lzw),len(orig)))
+    # orig = lzw_decode(lzw)
+    # print("lzw size:{} bytes -> {} bytes".format(len(lzw),len(orig)))
 
-    s = ""
+    # compressed length (2 bytes)
+    l = "{:04x}".format(len(lzw))
+    s = l[2:4] + l[0:2]
+    # data
     for b in lzw:
         s += "{:02x}".format(b)
 
