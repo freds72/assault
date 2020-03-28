@@ -93,6 +93,7 @@ function rspr(sx,sy,w,a,tc)
 	return s
 end
 
+-- create a 'hit' bitmask from sprite
 function make_hitmask(sx,sy,sw,sh,tc)
 	assert(flr(sw/32)<=1,"32+pixels wide sprites not yet supported")
 	tc=tc or 0
@@ -106,6 +107,32 @@ function make_hitmask(sx,sy,sw,sh,tc)
 		bitmask[j]=bits
 	end
 	return bitmask
+end
+
+-- returns true if hitmasks intersects
+function intersect_bitmasks(a,b,x,ymin,ymax)
+	-- todo: store texmap coords in object
+	local by=flr(8*a.y)-flr(8*b.y)
+	for y=ymin,ymax do
+	 -- out of boud b mask returns nil
+	 -- nil is evaluated as zero :]
+		if(band(a.hitmask[y],lshr(b.hitmask[by+y],x))!=0) return true		
+	end
+end
+
+function collide(a,b)
+	-- a is left most
+	if(a.x>b.x) a,b=b,a
+	-- screen coords
+	local ax,ay,bx,by=flr(8*a.x),flr(8*a.y),flr(8*b.x),flr(8*b.y)
+	local xmax,ymax=bx+b.w,by+b.h
+	if ax<xmax and 
+		ax+a.w>bx and
+		ay<ymax and
+		ay+a.w>by then
+	 	-- collision coords in 'a' space
+ 		return true,a,b,bx-ax,max(by-ay),min(by+b.h,ay+a.h)-ay
+	end
 end
 
 -- in-memory sprite
@@ -232,14 +259,27 @@ function lerpa(a,t)
 	return a[flr(#a*t)+1]
 end
 
--- game
+function normalize(u,v,scale)
+	scale=scale or 1
+	local d=sqrt(u*u+v*v)
+	if (d>0) u/=d v/=d
+	return u*scale,v*scale
+end
+
+-- manhattan distance (safe for overflow)
+function dist(x0,y0,x1,y1)
+	return abs(x1-x0)+abs(y1-y0)
+end
+
+-- game globals
 local time_t=0
 local jumppads={}
 local _map
 
--- todo: remove
+-- todo: remove for optimisation
 local gravity=-0.03
 
+-- player factory
 function make_plyr(x,y,z,angle)
 	local reload_ttl,reload_nuke_ttl,acc,da,dz,mortar_angle=0,0,0,0,0,0
 	local states,state,nuke_mode
@@ -424,6 +464,8 @@ function make_plyr(x,y,z,angle)
 	state=states.drop()
 
 	return {
+		x=x,
+		y=y,
 		w=0.4,
 		h=0.4,
 		get_pos=function()
@@ -462,6 +504,9 @@ function make_plyr(x,y,z,angle)
 			reload_nuke_ttl-=1
 			state(self)
 
+			-- "export" public variables
+			self.x=x
+			self.y=y
 			-- kill "ghost" rotation
 			if(abs(da)<0.001) da=0
 		end
@@ -491,8 +536,10 @@ function get_area(a,dx,dy)
 			fmget(x+w,y+h)))
 end
 
+-- particles: displayed on top of texture map
+-- each particle is rotated
 local parts={}
-function update_parts(m)
+function update_parts()
 	for i,p in pairs(parts) do
 		p.t+=1
 		-- elapsed?
@@ -502,13 +549,18 @@ function update_parts(m)
 		if p.kind==0 then
 			local x0,y0=p.x,p.y
 			local x1,y1=x0+p.dx,y0+p.dy
-				-- hit wall?
+				
+			-- hit npc
+			-- todo:
+
+			-- hit wall?
 			if solid(x0,y1) or solid(x1,y0) then
 				parts[i]=nil
 			else
 				p.x=x1
 				p.y=y1
 			end
+
 		-- nuke
 		elseif p.kind==1 then
 			p.x+=p.dx
@@ -525,12 +577,13 @@ function update_parts(m)
 		end
 	end
 end
-function draw_parts(m,x0,y0,z0,angle)
+
+function draw_parts(x0,y0,z0,angle)
 	local ca,sa=cos(angle),sin(angle)
 	for _,p in pairs(parts) do
 		-- actual "depth"
 		local z=p.z-z0+1
-		-- front of cam?
+		-- todo: front of cam?
 		if true then --z>0.1 then
 			local x,y,w=(p.x-x0)/z0,(p.y-y0)/z0,max(1,p.w*z)
 			-- project
@@ -594,7 +647,6 @@ function make_part(sx,sy,kind,x,y,z,dx,dy,dz)
 	})	
 end
 
-local nukes={}
 local dither_pat={0b1111111111111111,0b0111111111111111,0b0111111111011111,0b0101111111011111,0b0101111101011111,0b0101101101011111,0b0101101101011110,0b0101101001011110,0b0101101001011010,0b0001101001011010,0b0001101001001010,0b0000101001001010,0b0000101000001010,0b0000001000001010,0b0000001000001000,0b0000000000000000}
 local fadetable={
 	{5,13},
@@ -661,11 +713,8 @@ function make_nuke(x,y)
 	end
 end
 
-local npcs={}
-local turret=make_memspr(96,32,32,32,32)
-local tank=make_memspr(0,32,16,16,16)
-local blast=make_memspr(80,32,16,16,nil,14)
-
+-->8
+-- map unpacking functions
 function array_add(a,value)
 	local tmp={}
 	if a then
@@ -677,6 +726,7 @@ function array_add(a,value)
 	return tmp
 end
 
+-- lzw decompression from cart rom
 function decompress(mem,fn)
 	local code,code_len,code_bits={},256,8
 	for i=0,255 do
@@ -684,8 +734,7 @@ function decompress(mem,fn)
 	end
     local buffer,buffer_bits,index,prefix=0,0,0
 
-	local x,y=0,0
-	local len=peek2(mem)
+	local x,y,len=0,0,peek2(mem)
 	mem+=2
     while index < len or buffer_bits >= code_bits do
         -- read buffer
@@ -693,7 +742,6 @@ function decompress(mem,fn)
 			buffer=bor(shl(buffer, 8),shr(peek(mem+index),16))
         	buffer_bits += 8
 			index += 1
-			--print(tostr(buffer,true))
 		end
         -- find word
         buffer_bits -= code_bits
@@ -707,28 +755,207 @@ function decompress(mem,fn)
 			code[shr(code_len,16)]=array_add(prefix, word[1])
 			code_len+=1
 		end
-		-- print(index.." k:"..tostr(key,true).." #w:"..#word.." ("..found..")")
 		prefix = word
-		--print(index..": "..#word)
-		--if(index>950) stop()
 
         -- code length
 		if code_len >= 2^code_bits then
-			-- print(#code.." bits: "..(code_bits+1))
 			code_bits += 1
 		end
-		-- emit output
-		-- total_len+=#word
-		
+
 		for i=1,#word do
 			local s=word[i]
+			-- 0: empty tile
 			if(s!=0) fn(s,x,y)
 			x+=1
 			if(x>127) x=0 y+=1 
 		end
 	end
 end
+
+-->8
+-- npc functions
+local npcs={}
+
+function pop(a)
+	if #a>0 then
+		local p=a[#a]
+		a[#a]=nil
+		return p
+	end
+end
+
+-- a-star
+local a_sides={{1,0},{0,1},{-1,0},{0,-1}}
+function closest(x,y,nodes)
+	local score,node=32000
+	for _,v in pairs(nodes) do
+		local vscore=dist(v.x,v.y,x,y)
+		if vscore<score then
+			node,score=v,vscore
+		end
+	end
+	return node
+end
+function update_path_async(self)
+::seek::
+	while self.hp>0 do
+		local x1,y1=plyr.x,plyr.y
+		if self.flee then
+			-- todo: review
+			local pr,cr=whereami(plyr),whereami(self)
+			local r=rooms[flr(16*pr+8*cr+self.id)%#rooms+1]
+			x1,y1=rndlerp(r.x,r.x+r.w),rndlerp(r.y,r.y+r.h)
+		else
+			-- avoid all actors moving to player at once!
+			if dist(x1,y1,self.x,self.y)>96 then
+				yield()
+				goto seek
+			end
+		end
 	
+	 	local x,y=self.x,self.y
+		local k,pk=flr(x)+128*flr(y),flr(x1)+128*flr(y1)
+		local flood,flood_len={[k]={x=x,y=y,k=k}},1
+		local closedset,camefrom,current={},{}
+
+		-- a* (+keep cpu/memory limits)
+		while flood_len>0 and flood_len<24 do
+			current=closest(x1,y1,flood)
+			
+			x,y,k=current.x,current.y,current.k
+			if (k==pk) break
+			flood[k],closedset[k]=nil,true
+			flood_len-=1
+	
+			for _,d in pairs(a_sides) do
+				local nx,ny=x,y
+				-- works only for quadrants
+				if band(get_area({x=nx,y=ny,w=self.w,h=self.h},d[1],d[2]),0x1)==0 then
+					nx+=d[1]
+					ny+=d[2]
+				end
+				k=flr(nx)+128*flr(ny)
+				if not closedset[k] and not camefrom[k] then
+					flood[k],camefrom[k]={x=nx,y=ny,k=k},current
+					flood_len+=1
+				end
+			end
+		end
+	
+		local path,prev={},current
+		while current do
+			add(path,current)
+			prev,current=current,camefrom[current.k]
+		end
+		self.path=path
+
+		-- wait path completion or timeout
+		local t=time_t+self.seek_dly
+		while #self.path>0 do
+			if(t<time_t) break
+			yield()
+		end
+		self.input=nil
+	end
+end
+
+function make_npc(base)
+
+end
+
+-- npc on 
+local npc_id=0
+function make_texture_npc(base,x,y)
+	local spr,cache=base.spr,{}
+	local angle,hit_t,move_t=0,0,0
+	-- can npc move?
+	local update_path=base.acc and cocreate(update_path_async)
+	local dx,dy=0,0
+	local id=npc_id
+	npc_id+=1
+	return {
+		hp=base.hp,
+		-- width in world units
+		h=base.h,
+		w=base.w,
+		-- todo: coords in texture space
+		-- coords in world units
+		x=x,
+		y=y,
+		seek_dly=60,
+		path={},
+		draw=function(self,texmap)
+			-- remove self from texture mapr
+			restoremap(cache,texmap)
+
+			-- select rotated sprite
+			spr:rotate(angle)
+			cache=spr:draw(texmap,self.x*8-base.sw/2,self.y*8-base.sh/2,hit_t>0)
+		end,
+		die=function(self)
+			make_blast(x,y)
+		end,
+		hit=function(self,dmg)
+			hp-=dmg
+			hit_t=4
+			if hp<=0 then
+				-- 
+				self:die()
+				return
+			end
+		end,
+		update=function(self)
+			hit_t-=1
+			if update_path then
+				move_t-=1
+				if move_t<0 and #self.path>0 then
+					local input=self.input
+					if not input or dist(x,y,input.x,input.y)<0.25 then
+						input=pop(self.path)
+						self.input=input
+					end
+					if input then
+						local u,v=normalize(input.x-x,input.y-y,0.8*base.acc)
+						dx+=u
+						dy+=v
+					end
+				end
+				
+				-- compute path for only 1 actor/frame
+				if id==(time_t%npc_id) then
+					assert(coresume(update_path,self))
+				end
+				x+=dx
+				y+=dy
+				dx*=base.acc
+				dy*=base.acc
+			end
+			-- todo: provide as parameters?
+			local px,py,pz,pangle=plyr:get_pos() 
+
+			-- angle=atan2(x-px,-y+py)
+
+			-- todo: materialize coords: 8*
+			self.x=x
+			self.y=y
+		end
+	}
+end
+
+local blasts={}
+local blast=make_memspr(80,32,16,16,nil,14)
+function make_blast(x,y)
+	-- explosion sprite(s)
+	local b=make_part(0,0,0,x,y,1)
+	b.draw=draw_blast
+	b.ttl=10
+
+	-- blast crater
+	add(blasts,{x=x,y=y})
+end
+
+-->8
+-- init/update/draw
 function _init()
 	_map={}
 	decompress(0x2000,function(s,i,j)
@@ -749,13 +976,16 @@ function _init()
 		end
 	end)
 
-	-- test particules
+	local turret=make_memspr(96,32,32,32,32)
+	local tank=make_memspr(0,32,16,16,16)
+
+	-- test actors
 	for i=1,20 do
-		add(npcs,{x=20+rnd(10),y=57+rnd(10),h=16,w=16,spr=tank,cache={}})
+		add(npcs,make_texture_npc({w=0.8,h=0.8,sh=16,sw=16,spr=tank,acc=0.1,hp=1},20+rnd(10),57+rnd(10)))
 	end
 	-- turrets
-	add(npcs,{x=21,y=33,h=32,w=32,spr=turret,cache={}})
-	add(npcs,{x=28,y=33,h=32,w=32,spr=turret,cache={}})
+	add(npcs,make_texture_npc({sh=32,sw=32,spr=turret},21,33))
+	add(npcs,make_texture_npc({sh=32,sw=32,spr=turret},28,33))
 end
 
 function _update()
@@ -763,113 +993,27 @@ function _update()
 	cam_update()
 
 	plyr:update()
+	for i=1,#npcs do
+		npcs[i]:update()
+	end
 
 	update_parts(_texmap)
 end
 
-function intersect_bitmasks(a,b,x,ymin,ymax)
-	local by=flr(8*a.y)-flr(8*b.y)
-	for y=ymin,ymax do
-	 -- out of boud b mask returns nil
-	 -- nil is evaluated as zero :]
-		if(band(a.hitmask[y],lshr(b.hitmask[by+y],x))!=0) return true		
-	end
-end
-
-function collide(a,b)
-	-- a is left most
-	if(a.x>b.x) a,b=b,a
-	-- screen coords
-	local ax,ay,bx,by=flr(8*a.x),flr(8*a.y),flr(8*b.x),flr(8*b.y)
-	local xmax,ymax=bx+b.w,by+b.h
-	if ax<xmax and 
-	 ax+a.w>bx and
-	 ay<ymax and
-	 ay+a.w>by then
-	 -- collision coords in a space
- 	return true,a,b,bx-ax,max(by-ay),min(by+b.h,ay+a.h)-ay
-	end
-end
-
-
 local red_blink={0,1,2,2,8,8,8,2,2,1}
 
-function draw_bitmask(bits,x,y,c)
- color(c)
- local ix=32*flr(x/32)
- for j,b in pairs(bits) do
-  -- shift to x
- 	b=lshr(b,x%32)
- 	for i=0,31 do
- 		if(band(lshr(0x8000,i),b)!=0) pset(ix+i,y+j,c)
-  end
- end
-end
-
-local blasts={}
 function _draw()
-
 	local px,py,pz,pangle=plyr:get_pos()
-
-	for i=#npcs,1,-1 do
-		local npc=npcs[i]
-		restoremap(npc.cache,_texmap)
-
-		-- select correct hitmask
-		npc.angle=atan2(npc.x-px,-npc.y+py)
-		npc.spr:rotate(npc.angle)
-
-		npc.hitmask=npc.spr.hitmask
-	end
-
 	-- commit blasts to texmap
 	for _,b in pairs(blasts) do
 		blast:draw(_texmap,8*b.x,8*b.y)
 	end
 	blasts={}
 
-	local blink={}
-	for p in all(parts) do
-		-- todo: align box with display position!
-		local blt={x=p.x-0.5,y=p.y-0.5,w=8,h=8,hitmask=p.hitmask}
-		for npc in all(npcs) do
-			local col,a,b,x0,y0,y1=collide(blt,npc)
-			if col and intersect_bitmasks(a,b,x0,y0,y1) then
-				--blink[npc]=true
-				del(npcs,npc)
-				del(parts,p)
-				local b=make_part(0,0,0,npc.x+npc.w/16,npc.y+npc.h/16,1)
-				b.draw=draw_blast
-				b.ttl=10
-
-				-- blast crater
-				add(blasts,{x=npc.x,y=npc.y})
-				break
-			end
-		end	
-	end
-
 	-- draw
 	for i=1,#npcs do
-		local npc=npcs[i]
-		npc.spr:rotate(npc.angle)
-		npc.cache=npc.spr:draw(_texmap,8*npc.x,8*npc.y,blink[npc])
+		npcs[i]:draw(_texmap)
 	end
-
-	--[[
-	restoremap(c0,_texmap)
-	turret:rotate(atan2(11.5-plyr.x,-12.5+plyr.y)+0.5)
-
-	local col,a,b,x0,y0,y1,blink
-	for _,p in pairs(parts) do
-		-- todo: align box with display position!
-		col,a,b,x0,y0,y1=collide({x=p.x-0.5,y=p.y-0.5,w=8,h=8,hitmask=p.hitmask},{x=10,y=11,w=32,h=32,hitmask=turret.hitmask})
-		if col and intersect_bitmasks(a,b,x0,y0,y1) then
-			blink=true
-			break
-		end	
-	end
-	]]
 
 	-- rotating map
 	rsprtexmap(_texmap,8*px+shkx,8*py+shky,pz,pangle)	
