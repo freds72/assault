@@ -203,8 +203,9 @@ function make_memspr(sx,sy,w,h,nangles,tc)
 			-- localize globals
 			local w,s,smask,shift,dx=w,s,smask,shl(flr(x)-8*ix,2),ix
 			local backup,bmask={},lshr(0xffff.ffff,shift)
+			y=flr(y)
 			for j=0,h-1 do
-				local srcx,dstx,v0mask,v0=j*w,bor(dx,shr(j+flr(y),16)),0xffff.ffff
+				local srcx,dstx,v0mask,v0=j*w,bor(dx,shr(j+y,16)),0xffff.ffff
 				for i=0,w-1 do
 					-- stride (shifted)
 					local v1,v1mask=blink and 0x7777.7777 or rotr(s[srcx],shift),rotr(smask[srcx],shift)						
@@ -235,6 +236,47 @@ function make_memspr(sx,sy,w,h,nangles,tc)
 		end
 	}
 end
+
+-- debug helper
+-- coords in pixel units
+function texline(texmap,x0,y0,x1,y1,c)
+	local cache={}
+	local w,h=abs(x1-x0),abs(y1-y0)
+	if w>h then
+		-- x-major
+		if(x0>x1) x0,y0,x1,y1=x1,y1,x0,y0
+		local dy=(y1-y0)/w
+		for x=flr(x0),flr(x1) do
+			-- find texture block (y world -> 8*y in texture map)
+			local dstx=bor(flr(x/8),shr(flr(y0),16))
+			local shift=band(x,7)*4
+			local pix,pixmask=lshr(0x1000*c,shift),rotr(0x0fff.ffff,shift)
+			local prev=texmap[dstx]
+			if(not cache[dstx]) cache[dstx]=prev
+			texmap[dstx]=bor(pix,band(prev,pixmask))
+			y0+=dy
+		end
+	else
+		-- y-major
+		if(y0>y1) x0,y0,x1,y1=x1,y1,x0,y0
+		local dx=(x1-x0)/h
+		for y=flr(y0),flr(y1) do
+			-- find texture block
+			local dstx=bor(flr(x0/8),shr(y,16))
+
+			-- each pixel is 4 bits
+			local shift=band(x0,7)*4
+			local pix,pixmask=lshr(0x1000*c,shift),rotr(0x0fff.ffff,shift)
+			--assert(false,tostr(pix,true).." msk:"..tostr(pixmask,true))
+			local prev=texmap[dstx]
+			if(not cache[dstx]) cache[dstx]=prev
+			texmap[dstx]=bor(pix,band(prev,pixmask))
+			x0+=dx
+		end
+	end
+	return cache
+end
+
 
 -->8
 local shkx,shky=0,0
@@ -349,7 +391,7 @@ function make_plyr(x,y,z,angle)
 				
 				-- get tile
 				self.x,self.y=x,y
-				local xarea,yarea=get_area(self,dx,0),get_area(self,0,dy,0)
+				local xarea,yarea=get_area(self,dx,0),get_area(self,0,dy)
 				-- solid?
 				if band(xarea,0x1)==0 then
 					x+=dx
@@ -830,6 +872,7 @@ function update_path_async(self)
 			for _,d in pairs(a_sides) do
 				local nx,ny=x,y
 				-- works only for quadrants
+				-- not a wall?
 				if band(get_area({x=nx,y=ny,w=self.w,h=self.h},d[1],d[2]),0x1)==0 then
 					nx+=d[1]
 					ny+=d[2]
@@ -873,6 +916,8 @@ function make_texture_npc(base,x,y)
 	local dx,dy=0,0
 	local id=npc_id
 	npc_id+=1
+	-- todo: debug remove
+	local dir_cache,angle_cache={},{}
 	return {
 		hp=base.hp,
 		-- width in world units
@@ -884,13 +929,25 @@ function make_texture_npc(base,x,y)
 		y=y,
 		seek_dly=60,
 		path={},
-		draw=function(self,texmap)
+		erase=function(self,texmap)
+			restoremap(angle_cache,texmap)
+			restoremap(dir_cache,texmap)
 			-- remove self from texture mapr
 			restoremap(cache,texmap)
-
+		end,
+		draw=function(self,texmap)
 			-- select rotated sprite
 			spr:rotate(angle)
 			cache=spr:draw(texmap,self.x*8-base.sw/2,self.y*8-base.sh/2,hit_t>0)
+
+			if self.input then
+				local ca,sa=cos(angle),sin(angle)
+				local x0,y0=8*self.x,8*self.y
+				local x1,y1=8*self.input.x,8*self.input.y
+				dir_cache=texline(texmap,x0,y0,x1,y1,11)
+				x1,y1=x0+16*ca,y0+16*sa
+				angle_cache=texline(texmap,x0,y0,x1,y1,8)
+			end
 		end,
 		die=function(self)
 			make_blast(x,y)
@@ -909,35 +966,59 @@ function make_texture_npc(base,x,y)
 			if update_path then
 				move_t-=1
 				if move_t<0 and #self.path>0 then
+					-- get result from a*
 					local input=self.input
-					if not input or dist(x,y,input.x,input.y)<0.25 then
+					if not input or dist(self.x,self.y,input.x,input.y)<1 then
 						input=pop(self.path)
 						self.input=input
 					end
 					if input then
-						local u,v=normalize(input.x-x,input.y-y,0.8*base.acc)
-						dx+=u
-						dy+=v
+						local target_angle=atan2(input.x-self.x,input.y-self.y)
+						local dtheta=target_angle-angle
+						if dtheta>0.5 then
+							angle+=1
+						elseif dtheta<-0.5 then
+							angle-=1
+						end
+						angle=lerp(angle,target_angle,0.1)
+						
+						local ca,sa=cos(angle),sin(angle)
+						dx=0.1*ca
+						dy=0.1*sa
+						
+						--[[
+						local u,v=normalize(input.x-self.x,input.y-self.y,0.8*base.acc)
+						dx=u
+						dy=v
+						]]
 					end
 				end
-				
+
+				-- update pos
+				local xarea,yarea=get_area(self,dx,0),get_area(self,0,dy)
+				-- solid?
+				if band(xarea,0x1)==0 then
+					self.x+=dx
+				end
+				if band(yarea,0x1)==0 then
+					self.y+=dy
+				end
+				dx*=0.9
+				dy*=0.9
+
 				-- compute path for only 1 actor/frame
 				if id==(time_t%npc_id) then
 					assert(coresume(update_path,self))
 				end
-				x+=dx
-				y+=dy
-				dx*=base.acc
-				dy*=base.acc
 			end
 			-- todo: provide as parameters?
 			local px,py,pz,pangle=plyr:get_pos() 
 
-			-- angle=atan2(x-px,-y+py)
+			--angle=atan2(x-px,-y+py)
 
 			-- todo: materialize coords: 8*
-			self.x=x
-			self.y=y
+			--self.x=x
+			--self.y=y
 		end
 	}
 end
@@ -1004,6 +1085,12 @@ local red_blink={0,1,2,2,8,8,8,2,2,1}
 
 function _draw()
 	local px,py,pz,pangle=plyr:get_pos()
+	
+	-- remove previous actors
+	for i=#npcs,1,-1 do
+		npcs[i]:erase(_texmap)
+	end
+
 	-- commit blasts to texmap
 	for _,b in pairs(blasts) do
 		blast:draw(_texmap,8*b.x,8*b.y)
@@ -1086,18 +1173,18 @@ dddddd7d5633335333336733ddd77ddd1111111111ddddddd1111111da0ddddddd101ddd33333333
 dddddddd3533333333535d33dddddddd111111111ddddddd11111111daaddddddddddddd3333333333333333666666661111499a4112442442442114a9941111
 00000000000000000000000033333333333333333333333300007777700000000888880000000000eeeeeeeeeeeeeeee00000000000000000000000000000000
 000000000000000000222200333333dddddddddddd33333300007000700000000088800000000000eee0ee00e0e0eeee00000000000000000000000000000000
-0000000d70000000022ee22033333357277777727d33333300000000000000000008000000000000eeeee08500eeeeee00000000000000000000000000000000
-0000a906709a000002e77e20333335d82666666827d3333300000000000000000000000000000000ee0ee052800ee0ee00000000000000000000000000000000
-0009d421524d900002e77e20333335eee666666e82d3333377000000000778000008000008000000eeee042014000eee00000000000000000000000000000000
-000d45f67f54d000022ee22033335d6666666666667d333370000000000078800080800088000000eee04d60010040ee00000000000000000000000000000000
-000556ffff6550000022220033335d6666666666667d333370000070000078880800080888000000e0e085d8024da0ee000000000000005d7600000000000000
-000d59faaf95d000000000003335d666666226666667d33370000000000078800080800088000000ee0880820285d00e00000000000055d66776000000000000
-000559f99f955000000000003335d666662882666667d33377000000000778000008000008000000ee04d000002800ee0000000000055d666777600000000000
-000d549dd945d00000000000335d66666288882666667d3300000000000000000000000000000000e005a808d002821e00000000007777777777770000000000
-000554922945500000099000335d66662888888266667d3300000000000000000008000000000000ee014005940001ee000000000d6666666666667000000000
-0004424994244000009a79003126666e88888888266662d300007000700000000088800000000000eeee100250280eee000000000d6666666666667000000000
-0002822222282000019aa9003182666e88888888266628d300007777700000000888880000000000eeeee0080082eeee000000005dd666666666667600000000
-000011111111000001199000318e6666e88888826666e8d300000000000000000000000000000000ee0ee100000e0eee00000005ddd666666666667760000000
+0000111111110000022ee22033333357277777727d33333300000000000000000008000000000000eeeee08500eeeeee00000000000000000000000000000000
+000282222228200002e77e20333335d82666666827d3333300000000000000000000000000000000ee0ee052800ee0ee00000000000000000000000000000000
+000442499424400002e77e20333335eee666666e82d3333377000000000778000008000008000000eeee042014000eee00000000000000000000000000000000
+0005549229455000022ee22033335d6666666666667d333370000000000078800080800088000000eee04d60010040ee00000000000000000000000000000000
+000d549dd945d0000022220033335d6666666666667d333370000070000078880800080888000000e0e085d8024da0ee000000000000005d7600000000000000
+000559f99f955000000000003335d666666226666667d33370000000000078800080800088000000ee0880820285d00e00000000000055d66776000000000000
+000d59faaf95d000000000003335d666662882666667d33377000000000778000008000008000000ee04d000002800ee0000000000055d666777600000000000
+000556ffff65500000000000335d66666288882666667d3300000000000000000000000000000000e005a808d002821e00000000007777777777770000000000
+000d45f76f54d00000099000335d66662888888266667d3300000000000000000008000000000000ee014005940001ee000000000d6666666666667000000000
+0009d425124d9000009a79003126666e88888888266662d300007000700000000088800000000000eeee100250280eee000000000d6666666666667000000000
+0000a907609a0000019aa9003182666e88888888266628d300007777700000000888880000000000eeeee0080082eeee000000005dd666666666667600000000
+00000007d000000001199000318e6666e88888826666e8d300000000000000000000000000000000ee0ee100000e0eee00000005ddd666666666667760000000
 00000000000000000011000031e66666e888888266666ed300000000000000000000000000000000eeeeee01e0eeeeee0000000dddd666666666667770000000
 000000000000000000000000331d66666e8888266666d53300000088888000000000000000000000eeeeeeeeeeeeeeee000000dd5dd666666666676777000000
 0000000000000000000000003331d6666eeeeee6666d5333000000088800000000000000336667766776677667766633000000555dd666666666676666000000
