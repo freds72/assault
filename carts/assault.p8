@@ -277,7 +277,6 @@ function texline(texmap,x0,y0,x1,y1,c)
 	return cache
 end
 
-
 -->8
 local shkx,shky=0,0
 function cam_shake()
@@ -289,6 +288,13 @@ function cam_update()
 	if abs(shkx)<0.5 and abs(shky)<0.5 then
 		shkx,shky=0,0
 	end
+end
+
+function clone(src,dst)
+	for k,v in pairs(src) do
+		dst[k]=v
+	end
+	return dst
 end
 
 function lerp(a,b,t)
@@ -313,10 +319,42 @@ function dist(x0,y0,x1,y1)
 	return abs(x1-x0)+abs(y1-y0)
 end
 
+local dither_pat={0b1111111111111111,0b0111111111111111,0b0111111111011111,0b0101111111011111,0b0101111101011111,0b0101101101011111,0b0101101101011110,0b0101101001011110,0b0101101001011010,0b0001101001011010,0b0001101001001010,0b0000101001001010,0b0000101000001010,0b0000001000001010,0b0000001000001000,0b0000000000000000}
+local fadetable={
+	{5,13},
+	{13,6},
+	{13,6},
+	{13,6},
+	{14,15},
+	{13,6},
+	{6,7},
+	{7,7},
+	{14,14},
+	{10,15},
+	{10,15},
+	{11,6},
+	{12,6},
+	{6,6},
+	{14,15},
+	{15,7}
+   }
+   
+function fade(i)
+	for c=0,15 do
+		if flr(i+1)>=3 then
+			pal(c,7,1)
+		else
+			pal(c,fadetable[c+1][flr(i+1)],1)
+		end
+	end
+end
+
 -- game globals
 local time_t=0
 local jumppads={}
-local _map
+local _map,_texmap
+-- delayed functions
+local futures={}
 
 -- todo: remove for optimisation
 local gravity=-0.03
@@ -335,10 +373,29 @@ function make_plyr(x,y,z,angle)
 	-- todo: remove
 	local nuke_v=0.5
 	
-	-- shared fire bullet routine
+	-- player-specific particles
+	-- regular bullet
+	local bullet_cls={
+		sx=16,sy=56,
+		sw=8,sh=8,
+		kind=0,
+		side=2,
+		hitmask=make_hitmask(16,56,8,8)
+	}
+	local nuke_shell_cls={
+		sx=16,sy=48,
+		sw=8,sh=8,
+		kind=1
+	}
+	-- nuke marker
+	local marker_cls={
+		ttl=20,
+		kind=3
+	}
+
 	function fire_bullet(ca,sa)
 		if btn(5) and reload_ttl<0 then
-			make_part(16,56,0,x,y,z,-sa/2,-ca/2)
+			make_part(bullet_cls,x,y,1,-sa/2,-ca/2)
 			reload_ttl=10
 		end
 	end
@@ -348,7 +405,7 @@ function make_plyr(x,y,z,angle)
 			-- polar coords
 			local cm,sm=nuke_v*cos(mortar_angle),-nuke_v*sin(mortar_angle)
 			local ca,sa=cm*cos(angle),cm*sin(angle)
-			make_part(16,48,1,x,y,z,-sa,-ca,sm)
+			make_part(nuke_shell_cls,x,y,z,-sa,-ca,sm)
 			-- next nuke
 			reload_nuke_ttl=15
 
@@ -357,8 +414,7 @@ function make_plyr(x,y,z,angle)
 			local d=b*b-4*a*c
 			if d>=0 then
 				local t=(-b-sqrt(d))/a/2
-				local marker=make_part(48,47,3,x-t*sa,y-t*ca,1)
-				marker.ttl=20
+				make_part(marker_cls,x-t*sa,y-t*ca,1)
 			end
 		end
 	end
@@ -556,9 +612,6 @@ function make_plyr(x,y,z,angle)
 end
 local plyr=make_plyr(28,22,2,0)
 
--- in memory map of sprite coords
-local _texmap={}
-
 -- check for the given tile flag
 function fmget(x,y)
 	return fget(_map[flr(x)+128*flr(y)])
@@ -588,7 +641,9 @@ function update_parts()
 		if(p.ttl and p.t>=p.ttl) parts[i]=nil break
 
 		-- bullet
-		if p.kind==0 then
+		if p.update then
+			parts[i]=p:update()			
+		elseif p.kind==0 then
 			local x0,y0=p.x,p.y
 			local x1,y1=x0+p.dx,y0+p.dy
 				
@@ -602,20 +657,17 @@ function update_parts()
 				p.x=x1
 				p.y=y1
 			end
-
 		-- nuke
 		elseif p.kind==1 then
 			p.x+=p.dx
 			p.y+=p.dy
 			p.z+=p.dz
 			if p.z<=1 then
-				make_nuke(p.x,p.y)
+				add(futures,function() make_nuke(p.x,p.y) end)
 				parts[i]=nil
 			end
 			-- gravity
 			p.dz+=gravity
-		elseif p.update then
-			parts[i]=p:update()
 		end
 	end
 end
@@ -627,132 +679,127 @@ function draw_parts(x0,y0,z0,angle)
 		local z=p.z-z0+1
 		-- todo: front of cam?
 		if true then --z>0.1 then
-			local x,y,w=(p.x-x0)/z0,(p.y-y0)/z0,max(1,p.w*z)
+			local x,y,w,h=(p.x-x0)/z0,(p.y-y0)/z0,p.sw and max(p.sw*z) or 0,p.sh and max(p.sh*z) or 0
 			-- project
 			local dx,dy=64+shl(ca*x-sa*y,3),112+shl(sa*x+ca*y,3)
 			if p.draw then
-				p:draw(dx-w/2,dy-w/2,z0)
+				p:draw(dx-w/2,dy-h/2,z0)
 			elseif p.kind==3 then
 				local sx,sy,w=48,47,17
 				if(time_t%8<4) sx,sy,w=61,32,13
 				sspr(sx,sy,w,w,dx-w/2,dy-w/2)
 			else
 				-- todo: select rotated sprite
-				sspr(p.sx,p.sy,p.w,p.w,dx-w/2,dy-w/2,w,w)
+				sspr(p.sx,p.sy,p.sw,p.sh,dx-w/2,dy-h/2,w,h)
 			end
 		end
 	end
 end
 
-local circles={
- {{r=8,c=7}},
- {{r=6,c=0}},
- {{r=5,c=2},{r=4,c=9},{r=3,c=10},{r=2,c=7}},
- {{r=7,c=2},{r=6,c=9},{r=5,c=10},{r=4,c=7}},
- {{r=8,c=0},{r=6,c=2},{r=5,c=9},{r=3,c=10},{r=1,c=7}},
- {{r=8,c=0,fp=0xa5a5.ff,fn=circ}},
- {{r=8,c=0,fp=0x5a5a.ff,fn=circ}},
- {{r=8,c=0,fp=0x5a5a.ff,fn=circ}}
-}
- 
-function draw_blast(p,x,y)
-	local t=p.t/p.ttl
-	palt(0,false)
-	palt(14,true)
-	local cc=circles[flr(t*#circles)+1]
-	for i=1,#cc do
-		local c=cc[i]
-		if(c.fp) fillp(c.fp)
-		(c.fn or circfill)(x,y,c.r,c.c)
-		fillp()
-	end
-	palt()
-end
-
-function make_part(sx,sy,kind,x,y,z,dx,dy,dz)
-	return add(parts,{
+function make_part(base_cls,x,y,z,dx,dy,dz)
+	return add(parts,clone(base_cls,{
 		-- age
 		t=0,
-		sx=sx,
-		sy=sy,
-		kind=kind,
 		x=x,
 		y=y,
-		z=z,
-		h=8,
-		w=8,
+		z=z or 1,
 		dx=dx or 0,
 		dy=dy or 0,
-		dz=dz or 0,
-		-- todo: only for relevant particles
-		hitmask=make_hitmask(sx,sy,8,8)
-	})	
+		dz=dz or 0
+	}))
 end
 
-local dither_pat={0b1111111111111111,0b0111111111111111,0b0111111111011111,0b0101111111011111,0b0101111101011111,0b0101101101011111,0b0101101101011110,0b0101101001011110,0b0101101001011010,0b0001101001011010,0b0001101001001010,0b0000101001001010,0b0000101000001010,0b0000001000001010,0b0000001000001000,0b0000000000000000}
-local fadetable={
-	{5,13},
-	{13,6},
-	{13,6},
-	{13,6},
-	{14,15},
-	{13,6},
-	{6,7},
-	{7,7},
-	{14,14},
-	{10,15},
-	{10,15},
-	{11,6},
-	{12,6},
-	{6,6},
-	{14,15},
-	{15,7}
+-- enemy bullets
+local small_bullet_cls={
+	sx=16,sy=40,
+	sw=8,sh=8,
+	kind=0,
+	side=1,
+	hitmask=make_hitmask(16,40,8,8)
+}
+local large_bullet_cls={
+	sx=16,sy=32,
+	sw=8,sh=8,
+	kind=0,
+	side=1,
+	hitmask=make_hitmask(16,32,8,8)
+}
+
+-- blast
+
+local blasts={}
+local blast_circles={
+	{{r=8,c=7}},
+	{{r=6,c=0}},
+	{{r=5,c=2},{r=4,c=9},{r=3,c=10},{r=2,c=7}},
+	{{r=7,c=2},{r=6,c=9},{r=5,c=10},{r=4,c=7}},
+	{{r=8,c=0},{r=6,c=2},{r=5,c=9},{r=3,c=10},{r=1,c=7}},
+	{{r=8,c=0,fp=0xa5a5.ff,fn=circ}},
+	{{r=8,c=0,fp=0x5a5a.ff,fn=circ}},
+	{{r=8,c=0,fp=0x5a5a.ff,fn=circ}}
    }
-   
-function fade(i)
-	for c=0,15 do
-		if flr(i+1)>=3 then
-			pal(c,7,1)
-		else
-			pal(c,fadetable[c+1][flr(i+1)],1)
+local blast_spr=make_memspr(80,32,16,16,nil,14)
+local blast_cls={
+	draw=function(self,x,y)
+		palt(0,false)
+		palt(14,true)
+		local cc=lerpa(blast_circles,self.t/self.ttl)
+		for i=1,#cc do
+			local c=cc[i]
+			if(c.fp) fillp(c.fp)
+			(c.fn or circfill)(x,y,c.r,c.c)
+			fillp()
 		end
+		palt()
+	end,
+	update=function(self)
+		-- blast crater
+		if(self.t==5) add(blasts,{x=x,y=y})
+		return self
 	end
+}
+function make_blast(x,y)
+	-- explosion part(s)
+	return make_part(blast_cls,x,y,1)
 end
 
+-- nuke "particle"
 function make_nuke(x,y)
 	local r0,r1,fp,t=8,8,#dither_pat,0
 	-- nuke always at floor level
-	local nuke=make_part(0,0,2,x,y,1)
-	nuke.update=function(self)
-		t+=1
-		if(t>27) return
-		return self
-	end
-	nuke.draw=function(self,x,y,z)
-		--
-		if t<4 then
-			fade(t)
-		else
-			pal()
-			r0=lerp(r0,45,0.22)/z
-			r1=lerp(r1,45,0.3)/z
-			local rr0,rr1=r0*r0,r1*r1
-			if(t>20) fp=lerp(fp,1,0.1)	
-			fillp(dither_pat[flr(fp)]+0x0.ff)
-			camera(-x,-y)
-			color(0x77)
-			for r=0,r1 do
-				local x0,x1=max(rr0-r*r)^0.5,(rr1-r*r)^0.5
-				rectfill(-x0,r,-x1,r)
-				rectfill(x0,r,x1,r)
-				rectfill(-x0,-r,-x1,-r)
-				rectfill(x0,-r,x1,-r)    
+	return make_part({
+		update=function(self)
+			t+=1
+			-- todo: blast npc in range!
+			if(t>27) return
+			return self
+		end,
+		draw=function(self,x,y,z)
+			--
+			if t<4 then
+				fade(t)
+			else
+				pal()
+				r0=lerp(r0,45,0.22)/z
+				r1=lerp(r1,45,0.3)/z
+				local rr0,rr1=r0*r0,r1*r1
+				if(t>20) fp=lerp(fp,1,0.1)	
+				fillp(dither_pat[flr(fp)]+0x0.ff)
+				camera(-x,-y)
+				color(0x77)
+				for r=0,r1 do
+					local x0,x1=max(rr0-r*r)^0.5,(rr1-r*r)^0.5
+					rectfill(-x0,r,-x1,r)
+					rectfill(x0,r,x1,r)
+					rectfill(-x0,-r,-x1,-r)
+					rectfill(x0,-r,x1,-r)    
+				end
+				circ(0,0,r0,12)
+				fillp()
+				camera()
 			end
-			circ(0,0,r0,12)
-			fillp()
-			camera()
 		end
-	end
+	},x,y,1)
 end
 
 -->8
@@ -1023,22 +1070,10 @@ function make_texture_npc(base,x,y)
 	}
 end
 
-local blasts={}
-local blast=make_memspr(80,32,16,16,nil,14)
-function make_blast(x,y)
-	-- explosion sprite(s)
-	local b=make_part(0,0,0,x,y,1)
-	b.draw=draw_blast
-	b.ttl=10
-
-	-- blast crater
-	add(blasts,{x=x,y=y})
-end
-
 -->8
 -- init/update/draw
 function _init()
-	_map={}
+	_map,_texmap={},{}
 	decompress(0x2000,function(s,i,j)
 		_map[i+128*j]=s
 
@@ -1071,6 +1106,12 @@ end
 
 function _update()
 	time_t+=1
+	-- any futures?
+	for _,f in pairs(futures) do
+		f()
+	end
+	futures={}
+
 	cam_update()
 
 	plyr:update()
@@ -1078,7 +1119,7 @@ function _update()
 		npcs[i]:update()
 	end
 
-	update_parts(_texmap)
+	update_parts()
 end
 
 local red_blink={0,1,2,2,8,8,8,2,2,1}
@@ -1093,7 +1134,7 @@ function _draw()
 
 	-- commit blasts to texmap
 	for _,b in pairs(blasts) do
-		blast:draw(_texmap,8*b.x,8*b.y)
+		blast_spr:draw(_texmap,8*b.x,8*b.y)
 	end
 	blasts={}
 
@@ -1107,7 +1148,7 @@ function _draw()
 
 	plyr:draw()
 
-	draw_parts(_texmap,px,py,pz,pangle)
+	draw_parts(px,py,pz,pangle)
 
 	--[[
 	if col then
