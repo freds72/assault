@@ -1,65 +1,78 @@
 pico-8 cartridge // http://www.pico-8.com
 version 18
 __lua__
--- rotomap
-function rsprtexmap(m,px,py,pz,a)
-	local ca,sa=cos(a)*pz,sin(a)*pz
-	local ddx0,ddy0=ca,sa
-	local ddx1,ddy1=ca,sa
-	local ddx2,ddy2=2*ca,2*sa
-	local ddx3,ddy3=3*ca,3*sa
-	local ddx4,ddy4=4*ca,4*sa
-	local ddx5,ddy5=5*ca,5*sa
-	local ddx6,ddy6=6*ca,6*sa
-	local ddx7,ddy7=7*ca,7*sa
-	ca,sa=cos(a),sin(a)
-	local w=shl(pz,7)
-	-- position in texmap space
-	px,py=(px-48*sa*pz)-w,(py-48*ca*pz)-w
-	local dx0,dy0=(sa-ca)*(w/2-0.5)+w,w-(ca+sa)*(w/2-0.5)
+-- assault
+-- by @freds72
 
-	-- dx/dy: offset in full texmap space (1024x1024)
-	local mem,dx,dy=0x6000,8*ddx0,8*ddy0
-	-- mdx: offset in texmap space (256x1024)
-	local mdx1,mdx2,mdx3,mdx4,mdx5,mdx6,mdx7=shr(ddx0,3),shr(2*ddx0,3),shr(3*ddx0,3),shr(4*ddx0,3),shr(5*ddx0,3),shr(6*ddx0,3),shr(7*ddx0,3)
-	for iy=0,127 do
-		local srcx,srcy,mx=dy0+px,dx0+py,shr(dy0+px,3)
-		for ix=0,15 do
-
-			-- find pixel 8-pixel row				
-			-- get x%8 pixel (starting at 8th nibble = 0xf000)
-			-- shift back to least sig byte (int)
-			poke4(
-				mem,
-				bor(
-					bor(
-						bor(rotr(band(shl(m[bor(band(mx,0xffff),band(lshr(srcy,16),0x0.ffff))],shl(band(srcx,7),2)),0xf000),28),
-						rotr(band(shl(m[bor(band(mx+mdx1,0xffff),band(lshr(srcy-ddy1,16),0x0.ffff))],shl(band(srcx+ddx1,7),2)),0xf000),24)),
-						bor(rotr(band(shl(m[bor(band(mx+mdx2,0xffff),band(lshr(srcy-ddy2,16),0x0.ffff))],shl(band(srcx+ddx2,7),2)),0xf000),20),
-						rotr(band(shl(m[bor(band(mx+mdx3,0xffff),band(lshr(srcy-ddy3,16),0x0.ffff))],shl(band(srcx+ddx3,7),2)),0xf000),16))
-					),
-					bor(
-					bor(rotr(band(shl(m[bor(band(mx+mdx4,0xffff),band(lshr(srcy-ddy4,16),0x0.ffff))],shl(band(srcx+ddx4,7),2)),0xf000),12),
-					rotr(band(shl(m[bor(band(mx+mdx5,0xffff),band(lshr(srcy-ddy5,16),0x0.ffff))],shl(band(srcx+ddx5,7),2)),0xf000),8)),
-					bor(rotr(band(shl(m[bor(band(mx+mdx6,0xffff),band(lshr(srcy-ddy6,16),0x0.ffff))],shl(band(srcx+ddx6,7),2)),0xf000),4),
-					band(shl(m[bor(band(mx+mdx7,0xffff),band(lshr(srcy-ddy7,16),0x0.ffff))],shl(band(srcx+ddx7,7),2)),0xf000))
-					)
-				)
-			)  		
-			mem+=4
-			srcx+=dx
-			srcy-=dy
-			mx+=ddx0
-		end
-		dy0+=ddy0
-		dx0+=ddx0
+-- misc helper functions
+local shkx,shky=0,0
+function cam_shake()
+	shkx,shkx=min(1,shkx+rnd()),min(1,shky+rnd())
+end
+function cam_update()
+	shkx*=-0.7-rnd(0.2)
+	shky*=-0.7-rnd(0.2)
+	if abs(shkx)<0.5 and abs(shky)<0.5 then
+		shkx,shky=0,0
 	end
 end
 
--- restore background
-function restoremap(backup,dst)			
-	for k,v in pairs(backup) do
+function clone(src,dst)
+	for k,v in pairs(src) do
 		dst[k]=v
+	end
+	return dst
+end
+
+function lerp(a,b,t)
+	return a*(1-t)+t*b
+end
+
+-- pick a value from an array
+-- t must be [0,1[
+function lerpa(a,t)
+	return a[flr(#a*t)+1]
+end
+
+function normalize(u,v,scale)
+	scale=scale or 1
+	local d=sqrt(u*u+v*v)
+	if (d>0) u/=d v/=d
+	return u*scale,v*scale
+end
+
+-- manhattan distance (safe for overflow)
+function dist(x0,y0,x1,y1)
+	return abs(x1-x0)+abs(y1-y0)
+end
+
+local dither_pat={0b1111111111111111,0b0111111111111111,0b0111111111011111,0b0101111111011111,0b0101111101011111,0b0101101101011111,0b0101101101011110,0b0101101001011110,0b0101101001011010,0b0001101001011010,0b0001101001001010,0b0000101001001010,0b0000101000001010,0b0000001000001010,0b0000001000001000,0b0000000000000000}
+local fadetable={
+	{5,13},
+	{13,6},
+	{13,6},
+	{13,6},
+	{14,15},
+	{13,6},
+	{6,7},
+	{7,7},
+	{14,14},
+	{10,15},
+	{10,15},
+	{11,6},
+	{12,6},
+	{6,6},
+	{14,15},
+	{15,7}
+   }
+   
+function fade(i)
+	for c=0,15 do
+		if flr(i+1)>=3 then
+			pal(c,7,1)
+		else
+			pal(c,fadetable[c+1][flr(i+1)],1)
+		end
 	end
 end
 
@@ -237,122 +250,13 @@ function make_memspr(sx,sy,w,h,nangles,tc)
 	}
 end
 
--- debug helper
--- coords in pixel units
-function texline(texmap,x0,y0,x1,y1,c)
-	local cache={}
-	local w,h=abs(x1-x0),abs(y1-y0)
-	if w>h then
-		-- x-major
-		if(x0>x1) x0,y0,x1,y1=x1,y1,x0,y0
-		local dy=(y1-y0)/w
-		for x=flr(x0),flr(x1) do
-			-- find texture block (y world -> 8*y in texture map)
-			local dstx=bor(flr(x/8),shr(flr(y0),16))
-			local shift=band(x,7)*4
-			local pix,pixmask=lshr(0x1000*c,shift),rotr(0x0fff.ffff,shift)
-			local prev=texmap[dstx]
-			if(not cache[dstx]) cache[dstx]=prev
-			texmap[dstx]=bor(pix,band(prev,pixmask))
-			y0+=dy
-		end
-	else
-		-- y-major
-		if(y0>y1) x0,y0,x1,y1=x1,y1,x0,y0
-		local dx=(x1-x0)/h
-		for y=flr(y0),flr(y1) do
-			-- find texture block
-			local dstx=bor(flr(x0/8),shr(y,16))
-
-			-- each pixel is 4 bits
-			local shift=band(x0,7)*4
-			local pix,pixmask=lshr(0x1000*c,shift),rotr(0x0fff.ffff,shift)
-			--assert(false,tostr(pix,true).." msk:"..tostr(pixmask,true))
-			local prev=texmap[dstx]
-			if(not cache[dstx]) cache[dstx]=prev
-			texmap[dstx]=bor(pix,band(prev,pixmask))
-			x0+=dx
-		end
-	end
-	return cache
-end
-
 -->8
-local shkx,shky=0,0
-function cam_shake()
-	shkx,shkx=min(1,shkx+rnd()),min(1,shky+rnd())
-end
-function cam_update()
-	shkx*=-0.7-rnd(0.2)
-	shky*=-0.7-rnd(0.2)
-	if abs(shkx)<0.5 and abs(shky)<0.5 then
-		shkx,shky=0,0
-	end
-end
-
-function clone(src,dst)
-	for k,v in pairs(src) do
-		dst[k]=v
-	end
-	return dst
-end
-
-function lerp(a,b,t)
-	return a*(1-t)+t*b
-end
-
--- pick a value from an array
--- t must be [0,1[
-function lerpa(a,t)
-	return a[flr(#a*t)+1]
-end
-
-function normalize(u,v,scale)
-	scale=scale or 1
-	local d=sqrt(u*u+v*v)
-	if (d>0) u/=d v/=d
-	return u*scale,v*scale
-end
-
--- manhattan distance (safe for overflow)
-function dist(x0,y0,x1,y1)
-	return abs(x1-x0)+abs(y1-y0)
-end
-
-local dither_pat={0b1111111111111111,0b0111111111111111,0b0111111111011111,0b0101111111011111,0b0101111101011111,0b0101101101011111,0b0101101101011110,0b0101101001011110,0b0101101001011010,0b0001101001011010,0b0001101001001010,0b0000101001001010,0b0000101000001010,0b0000001000001010,0b0000001000001000,0b0000000000000000}
-local fadetable={
-	{5,13},
-	{13,6},
-	{13,6},
-	{13,6},
-	{14,15},
-	{13,6},
-	{6,7},
-	{7,7},
-	{14,14},
-	{10,15},
-	{10,15},
-	{11,6},
-	{12,6},
-	{6,6},
-	{14,15},
-	{15,7}
-   }
-   
-function fade(i)
-	for c=0,15 do
-		if flr(i+1)>=3 then
-			pal(c,7,1)
-		else
-			pal(c,fadetable[c+1][flr(i+1)],1)
-		end
-	end
-end
 
 -- game globals
 local time_t=0
 local jumppads={}
-local _map,_texmap
+local _map,_cells,_cells_map,_grid,_map_lru
+
 -- delayed functions
 local futures={}
 
@@ -803,7 +707,7 @@ function make_nuke(x,y)
 end
 
 -->8
--- map unpacking functions
+-- lzw map unpacking functions
 function array_add(a,value)
 	local tmp={}
 	if a then
@@ -816,6 +720,7 @@ function array_add(a,value)
 end
 
 -- lzw decompression from cart rom
+-- reference: https://github.com/coells/100days
 function decompress(mem,fn)
 	local code,code_len,code_bits={},256,8
 	for i=0,255 do
@@ -854,7 +759,7 @@ function decompress(mem,fn)
 		for i=1,#word do
 			local s=word[i]
 			-- 0: empty tile
-			if(s!=0) fn(s,x,y)
+			fn(s,x,y)
 			x+=1
 			if(x>127) x=0 y+=1 
 		end
@@ -949,13 +854,9 @@ function update_path_async(self)
 	end
 end
 
-function make_npc(base)
-
-end
-
 -- npc on 
 local npc_id=0
-function make_texture_npc(base,x,y)
+function make_npc(base,x,y)
 	local spr,cache=base.spr,{}
 	local angle,hit_t,move_t=0,0,0
 	-- can npc move?
@@ -1071,37 +972,152 @@ function make_texture_npc(base,x,y)
 end
 
 -->8
+-- map helpers
+function draw_cell(cell)
+	local v0,v1,v2,v3=
+		cell[1],
+		cell[2],
+		cell[3],
+		cell[4]
+	line(v0.x,v0.y,v1.x,v1.y,7)
+	line(v1.x,v1.y,v2.x,v2.y,7)
+	line(v2.x,v2.y,v3.x,v3.y,7)
+	line(v3.x,v3.y,v0.x,v0.y,7)
+end
+
+function draw_map(x,y,z,a)
+	local ca,sa=cos(a),-sin(a)
+	local scale=1/z
+	-- project all potential tiles
+	for i,g in pairs(_grid) do
+		-- to cam space
+		local ix,iy=16*(i%9)-x,16*flr(i/9)-y
+		ix,iy=scale*(ca*ix+sa*iy)+8,scale*(-sa*ix+ca*iy)+4
+		local outcode=0
+		if ix>16 then outcode=2
+		elseif ix<0 then outcode=1 end
+		if iy>16 then outcode=bor(outcode,8)
+		elseif iy<0 then outcode=bor(outcode,4) end
+		-- to screen space
+		g.x=8*ix
+		g.y=127-8*iy
+		g.outcode=outcode
+	end
+	
+	-- collect visible cells
+	local viz={}
+	for k,cell in pairs(_cells) do
+		local out=band(
+			band(cell[1].outcode,
+	   		band(cell[2].outcode,cell[3].outcode)),
+	   		cell[4].outcode)
+		-- visible or partially visible?
+		if(out==0) viz[k]=cell
+	end
+	
+	-- draw existing cache entries
+	for i,entry in pairs(_map_lru) do
+		local cell=viz[entry.k]
+		if cell then
+			draw_cell(cell,entry.k-1)
+			-- update lru time
+			entry.t=time_t
+			-- done
+			viz[entry.k]=nil
+		end
+	end
+   
+	-- remaining tiles
+	-- (e.g. cache misses)
+	for k,cell in pairs(viz) do
+		local mint,mini=32000,#_map_lru+1
+		-- cache full?
+		if mini>6 then
+			-- find lru entry
+			for i=1,6 do
+				local entry=_map_lru[i]
+				if entry.t<mint then
+					mint,mini=entry.t,i
+				end
+			end
+		end
+		-- add/reuse cache entry
+		_map_lru[mini]={k=k,t=time_t}
+		-- fill cache entry
+		local mem=0x2000+(mini-1)*4
+		for base,v in pairs(_cells_map[k]) do
+			-- todo:4* in init
+			poke4(mem+4*base,v)
+		end
+		-- draw with fresh cache entry		
+		draw_cell(cell,mini-1)
+	end   
+end
+
+-->8
 -- init/update/draw
 function _init()
-	_map,_texmap={},{}
+	-- collision map
+	_map,_cells,_cells_map,_grid,_map_lru={},{},{},{},{}
+	-- 
+	-- grid_w intervals = grid_w+1^2 points
+	for i=0,9*9-1 do
+		_grid[i]={x=0,y=0,outcode=0}
+	end
+	-- debug
+	local cell_count={}
+	-- direct link to grid vertices?
+	for i=0,63 do
+		-- cell coords in grid space 
+		-- 5: account for 'additional' 5th point
+		local ci=(i%8)+9*flr(i/8)
+		local tiles={
+			_grid[ci],
+			_grid[ci+1],
+			_grid[ci+8+2],
+			_grid[ci+8+1]
+		}
+		_cells[i]=tiles
+		_cells_map[i]={}
+	end
+
+	cls()
+	
 	decompress(0x2000,function(s,i,j)
 		_map[i+128*j]=s
 
 		if fget(s,2) then
 			jumppads[i+128*j]=3
 		end
-		
-		local sx,sy=band(shl(s,3),127),shl(flr(s/16),3)
-		for y=0,7 do
-			local b=0
-			for shift=0,7 do
-				b=bor(b,sget(sx+shift,sy+y)*lshr(0x1000.0000,4*shift))
-			end
-			-- use x.y 16:16 for texmap coords
-			_texmap[bor(i,lshr(8*j+y,16))]=b
-		end
+
+		-- cell coord (128x128)->(8x8)
+		local ci,cj=flr(i/16),flr(j/16)
+		local ck=bor(ci,shl(cj,3))
+		local cell_map=_cells_map[ck]
+		assert(cell_map,ci.."/"..cj..":"..ck)
+		-- cell is 4*dword with a stride of 128/4 = 32
+		-- cell entry is packed as a dword
+		-- todo: simplify...
+		local k=4*(band(i,15)+shl(band(j,15),5))
+		local m=cell_map[k] or 0
+		local c=cell_count[ck] or 0
+		c+=1
+		cell_count[ck]=c
+		-- shift 
+		m=bor(m,shl(0x0.0001,8*band(i,3))*s)
+		cell_map[k]=m
+		-- dword-packed map
+		_cells_map[ck]=cell_map
+
+		--rectfill(ci*16,cj*16,(ci+1)*16-1,(cj+1)*16-1,1)
+		--print(ck.."\n"..c,ci*16+1,cj*16+1,2)
 	end)
 
-	local turret=make_memspr(96,32,32,32,32)
-	local tank=make_memspr(0,32,16,16,16)
-
-	-- test actors
-	for i=1,20 do
-		add(npcs,make_texture_npc({w=0.8,h=0.8,sh=16,sw=16,spr=tank,acc=0.1,hp=1},20+rnd(10),57+rnd(10)))
+	cls()
+	for k,v in pairs(_cells_map[1]) do
+		print((4*(k%4)+16).."|"..flr(k/4)..":"..tostr(v,true))
 	end
-	-- turrets
-	add(npcs,make_texture_npc({sh=32,sw=32,spr=turret},21,33))
-	add(npcs,make_texture_npc({sh=32,sw=32,spr=turret},28,33))
+	-- stop()
 end
 
 function _update()
@@ -1126,11 +1142,19 @@ local red_blink={0,1,2,2,8,8,8,2,2,1}
 
 function _draw()
 	local px,py,pz,pangle=plyr:get_pos()
-	
-	-- remove previous actors
-	for i=#npcs,1,-1 do
-		npcs[i]:erase(_texmap)
+
+	cls()
+	palt(0,false)
+	--draw_map(px,py,pz,pangle)
+	local mem=0x2000+16
+	for base,v in pairs(_cells_map[2]) do
+		poke4(mem+base,0x0303.0303)
 	end
+	for base=0,4*16-1 do
+		--poke4(0x2000+4*(base%4)+128*flr(base/4),0x0303.0303)
+	end
+	map(16,0,0,0,16,16)
+	palt()
 
 	-- commit blasts to texmap
 	for _,b in pairs(blasts) do
@@ -1140,11 +1164,8 @@ function _draw()
 
 	-- draw
 	for i=1,#npcs do
-		npcs[i]:draw(_texmap)
+		npcs[i]:draw()
 	end
-
-	-- rotating map
-	rsprtexmap(_texmap,8*px+shkx,8*py+shky,pz,pangle)	
 
 	plyr:draw()
 
@@ -1170,8 +1191,8 @@ function _draw()
 	prints(s,30-#s+1,9,7,0)
 	]]
 
-	rectfill(0,0,127,8,1)
-	print(stat(1).."/"..stat(7).."/"..stat(9).." "..stat(0).."kb",2,2,7)
+	--rectfill(0,0,127,8,1)
+	--print(stat(1).."/"..stat(7).."/"..stat(9).." "..stat(0).."kb",2,2,7)
 end
 
 function prints(s,x,y,c,sc)
@@ -1295,17 +1316,13 @@ __gff__
 0000010101000000000000000000000000000100010000000000000000000000000001010100000001000000000000000002020000000000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000101000000000000000000000000000001010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 __map__
-960600804060503824160d0784426150b864361d0f8844625138a4562d178c466351b8e4763d1f904864523924964d27944a6552b964b65d2f984c665339a4d62e0a0c82c3408040666d340c86c3409050683418a150c320804cf0101b0cd22833f96820350168566b55bae56ea92dad0080763b2596cd6402340315f94342c5
-6360ab2e573ba5d6e4aa0a342af6c93340257300e040213c26170d86bc340377cbe84b0801476451f83c20140d97cc0180e13c48271925bf04f209ed227f28131b8e355aa0b0582f9cbc82f3f24d0e411c8fdbe9f53ab1c6b75f89d96ce45b5472793fc6dd6f37baed862b85c3c76db71a7098944dd7ec0984fcde0f3e3c0bd0
-e8b9187f2611602311891a19eef47833e1d1753cb85bcb4201ddf6c6c30d01108d63828020079de87a024400095adf94741a7817e65999664070495c0000b50a0a4800a5f8150ce1d87a1e05e1302c0888d475ee184780986dad8b22d885eb069458a12206a2b8b62e84d3989e3347def048158de38341568f12286a3f9062c8
-be329152078248925ae048009324d77d7e0300d0380f6b4369665b84c0895a195f81c0741e07dad0d2669a21302a6347e350482c0b42e0be6a9d27684dec9c11c06d7e0f03d0f83f9aa81a0e130627c4341b5200b5158b9f5029fc120d2950d66aa54340d66e4380aa30185180906c089567d8c6369262f9890b4ea904181a06
-c0b025414e6450663e759d97642784e3b41c184f8005bd665a55d566178a01b8a812806012aa6eaf90402d6b589715d8c059d635a400a29ed5597e7c985006cf3400ab990851800048ad61410045852ad765c8c05a6dd77aa763813bbaedbbee4066e941ecaba9860802161d91239885e400ab9ed06a3e6130561712b92dc062
-8902a0802a245580967af97909f2389fc909ec8d85bd0d0b05f9679f0794abca505b4d4e54f206188f27c8f23dc6c8da4611899be0a78002305f361ad859c0481c0a8593ebe443110456149ecef26cef3a27d84ca70d73d6ed1746bc2f2bd105be453150557933dd589eca169d719f0232ed8346d2166d7c6319065dcdc66158
-9aadcfdc736bed84e0c010c432e23870c43104ef15d6ec61ee1d8329cadb37ef36c4b11c1b86e1f88e7b8bd820179a04e90b161ee4dfdb34f822e9ba1e7832e2b8b0cba1609e67a95dcd99ca71deeafad7cf9ce339de7746801842a6130014c064099cba7f211455b6f48e90eb3a10c58104fc2ecde5b35cd8c6a053772c5508
-f323a062a406fe9b9b19f4922827b9f1013ec387effa27031bace93f39f6bd8000613a58c8516012927a001eab7331eebdb9bd839a4e5121457c4a20fc1007d2000b72d92d0ca9f69215fe401f83bf7b2fd0f982905469cceab7446b2cc3b305eab4a0b3445e45cd94a0c7524910434481063cd13a03e60e41d40c33a02d5920
-c3e069d98902566d7a04331794ff52bc1f788e49c8b0a4860658cb0f3c3031dd2e5890b09afc4b58ac3118b0f24267a1c43978b0221233f36206d7300b6207c4ca19d203162281f35b0b14aca545ce8a5b93b48b4d821f46c654a810b38131f032162432005ad9746b30d240c20ac6eb1855b91d8cd17e05c698732118c2b18e
-3271949564c519cc248330d2a1b0af3006b1558a7e8ff1464e43931318de5a4f5c5205b19b2963274c22f18f234209917971020dcbdd87279d0300951c8ea22bb530a84cacca68d1148c4a09235315b032464531daa09e8a404d019ea6180609c23148e619ec4462c926a044d03c8625ca9183f701da31c5348ce99d1c632679
-271c7b29e40a211ef9ed1c8ca38e72135640ba7362474f05053c8ce27d9913c73c4fa8009d0bd89dce97226427eb25649386831879246260d9154547f4f43be30c71a902e14067a6664c3206bfe3f801644c9991b23648ce285cb93e52aa794f32329bcad52aa59020583b73eca8c85bbd722d527d9c6678ce5aa52230b24a42
-23147aa816f9fca92d1aa59f62a4c6ea2104317582a8b3c38b3e0e3d218732aa4213a24688d0d1fdac2e8d02bfca4e419501fc3fd5acd252e34d4fe5f340a6847ea354830b328adb4c22855ec052c59b42e98a04af3150a612628651cac81476c7d92a40322ad360b5106c158cae477908f2c95262a553915a9198dca9e953a4
-b70e90f500a62eb4ec05b9b716eda0c0482d1ed8111b5a6a8ae2c01428a7a2b59db98576bebee518a92274c4548021604e7bac4f22b5c9a88f2d1d2235804e9a640e5237a6f55ebbd97b6f75efbe17c6f95f3be97d6fb5f7bf17e6fd5fbbf97f6ff5ffc0180701603c0981703607c118270560bc198370760fc2184709613c29
-8570b617c318670d61bc398770f61fc4188711623c4846000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+d70400804060503824160d0784426150b864361d0f8844625138a4562d178c466351b8e4763d1f904864523924964d27944a6552b964b65d2f984c665339a4d66d379c4e656d09e4f67d3f9f4ea773c0100e8d47a45268e046850a4ed0a2d1982acaa556ad57aa2a8294da7495a012aa806c40109d96cd67b3d6ab95d91d7eca
+01475c51f64b28140d77bc0180e13b55b2496eb827b049fba04c6e38c46202c160bdf2b77eb684827704723f2b85c3e24718bc6df72121c02393c9fd1e63359bc663ad79f8f6872a8ec284c4a26da6d44c27d56b2416ec9e96d1bfb2ac04623126af751bde64f63c0b356e79c78fb40442358d8fadd6e170f87c5e8682bf76bc
+de40e129ff77221519fa7d5ea0bf93cd26af85717f3fa7b78defdd84be5f4fafbbf1e77f1fd7ddff475f1805f37da0448a0681d8c04a0a82c120300d0380f62c3684e157fa106b4120701d0781f62c3487e2186e1c4715f0b02d0b82f88e2b8b6278a11a57c3c0f43e0fe238da388ca334615f0d2410d623904340d63d8f9168
+320782510501cf9240057db36d9b609e4842150528035324f80dc757dd775caa9610596953560c096e5c97dac985cc006649b50457cad59810045662ad58550c0531f86f2789de799c90d72413080215a1712396963def6f28959a92a150ca1d660049f2389fa709ea6d669fa735b2975a0aba854041aa40048f27c8f23da3a6
+d825959e74150305cc59e6a52a7f40dbc10c441156627aafa7aafab89f596a1ad402adeb89ea7ca9d3f6481314c54155685c1a4b149e5d2ca6eaa4b39c0ae949b346319065b85be6e6dfb4d65a0aee9e5930c432bd2f30c43104e7b55e76b62e158ec9af19fa1e9259692006f7bd3090caf7b39d7705dac40b15beb39954208b
+12c370abdb08c36ff04cb071540bb714a893974b189c2f7be2f3c2ef4ae1d6594a98f697a56dfc5f0d0c56204f2cbce70c3ab440734c554eb81c05930bcf746cfe8f40b42c965e5052ecdee15bf0abf974d0100d390996a6b9b12ed15bf5931c730290a985d6652c8ef9b7a66b327c5576d4aaccd5313c1ef8730390eb3abaf4
+dbb585dcb41dd2e1e05f0daf57d51b1da5bcdf17c92383d52a74a790d5f8dd2813d9ab3d3341b4f1ee2f87b3a6a97650847755bf1ecf813deb9a7df8cdf2a6c075ac8f9959fb4594acb8e5d48b94c77a8e9b9fe9f8ddcb94ead67f16cf9f66cc9513d8762c3ba6df79ca63969fbd2f41c09efa2f2d11f356665e62e99c209266
+dffbe79144b37a6e5a8ef6e4ee8168a729af7ec3b72b8765dcf9167ceb8051fe9dd7be7d86b5a9ab8344609572ae3465ccdfbf774899a019ca75e5517e3ff80100601328380ab2041715d45a0b53db5545c20529d53872d6c40076cda51a1d3387061613f183a598ec9c421caa94d29e536a6d4e2ac7d6f4ce5bc78547209e42
+c85cb859013d22103cdec07306ac156ac384c701db3ac24a06a21c4539911de644a00260e0e405349095babc78a853ce9c5863e769fc45b3a8b60c146f7e3055e8441417112191c46a292a33bfa4c472e199da8d059a3a16d1a0050e0c6b453129674475a4b864192485922102c2c621255884923a525a4b492255122423508f
+2af65049e4a3296534a79512a6554ab9592b6574af9612c6594b39692d65b4b79712e65d4bb9792f65f4bf981306614c3989316634c7991326654cb999336674cf9a1346694d39a93566b4d79b13666d4db9b93766f4df26a0
