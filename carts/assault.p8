@@ -1044,9 +1044,8 @@ function draw_map(x,y,z,a)
 		-- add/reuse cache entry
 		_map_lru[mini]={k=k,t=time_t}
 		-- fill cache entry
-		local mem=0x2000+(mini-1)*4
+		local mem=0x2000+(mini-1)*16
 		for base,v in pairs(_cells_map[k]) do
-			-- todo:4* in init
 			poke4(mem+4*base,v)
 		end
 		-- draw with fresh cache entry		
@@ -1098,7 +1097,7 @@ function _init()
 		-- cell is 4*dword with a stride of 128/4 = 32
 		-- cell entry is packed as a dword
 		-- todo: simplify...
-		local k=4*(band(i,15)+shl(band(j,15),5))
+		local k=flr(band(i,15)/4)+shl(band(j,15),5)
 		local m=cell_map[k] or 0
 		local c=cell_count[ck] or 0
 		c+=1
@@ -1114,10 +1113,10 @@ function _init()
 	end)
 
 	cls()
-	for k,v in pairs(_cells_map[1]) do
-		print((4*(k%4)+16).."|"..flr(k/4)..":"..tostr(v,true))
+	for k,v in pairs(_cells_map[2]) do
+		print((4*(k%4)+32).."|"..flr(k/32)..":"..tostr(v,true))
 	end
-	-- stop()
+	--stop()
 end
 
 function _update()
@@ -1145,15 +1144,7 @@ function _draw()
 
 	cls()
 	palt(0,false)
-	--draw_map(px,py,pz,pangle)
-	local mem=0x2000+16
-	for base,v in pairs(_cells_map[2]) do
-		poke4(mem+base,0x0303.0303)
-	end
-	for base=0,4*16-1 do
-		--poke4(0x2000+4*(base%4)+128*flr(base/4),0x0303.0303)
-	end
-	map(16,0,0,0,16,16)
+	draw_map(px,py,pz,pangle)
 	palt()
 
 	-- commit blasts to texmap
@@ -1191,8 +1182,8 @@ function _draw()
 	prints(s,30-#s+1,9,7,0)
 	]]
 
-	--rectfill(0,0,127,8,1)
-	--print(stat(1).."/"..stat(7).."/"..stat(9).." "..stat(0).."kb",2,2,7)
+	rectfill(0,0,127,8,1)
+	print(stat(1).."/"..stat(7).."/"..stat(9).." "..stat(0).."kb",2,2,7)
 end
 
 function prints(s,x,y,c,sc)
