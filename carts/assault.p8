@@ -514,7 +514,7 @@ function make_plyr(x,y,z,angle)
 		end
 	}
 end
-local plyr=make_plyr(28,22,2,0)
+local plyr=make_plyr(107,68,20,0)
 
 -- check for the given tile flag
 function fmget(x,y)
@@ -973,16 +973,65 @@ end
 
 -->8
 -- map helpers
-function draw_cell(cell)
+function draw_cell(v,offset)
+	offset*=16
+	local uv={
+		offset,0,
+		16+offset,0,
+		16+offset,16,
+		offset,16}
+	local p0,nodes=v[4],{}
+	local x0,y0,u0,v0=p0.x,p0.y,uv[7],uv[8]
+	for i=1,4 do
+		local p1=v[i]
+		local x1,y1,u1,v1=p1.x,p1.y,uv[i*2-1],uv[i*2]
+		local _x1,_y1,_u1,_v1=x1,y1,u1,v1
+		if(y0>y1) x0,y0,x1,y1,u0,v0,u1,v1=x1,y1,x0,y0,u1,v1,u0,v0
+		local dy=y1-y0
+		local dx,du,dv=(x1-x0)/dy,(u1-u0)/dy,(v1-v0)/dy
+		if(y0<0) x0-=y0*dx u0-=y0*du v0-=y0*dv y0=0
+		local cy0=ceil(y0)
+		-- sub-pix shift
+		local sy=cy0-y0
+		x0+=sy*dx
+		u0+=sy*du
+		v0+=sy*dv
+		for y=cy0,min(ceil(y1)-1,127) do
+			local x=nodes[y]
+			if x then
+				--rectfill(x[1],y,x0,y,offset/16)
+				
+				local a,au,av,b,bu,bv=x[1],x[2],x[3],x0,u0,v0
+				if(a>b) a,au,av,b,bu,bv=b,bu,bv,a,au,av
+				local dab=b-a
+				local dau,dav=(bu-au)/dab,(bv-av)/dab
+				local ca=ceil(a)
+				-- sub-pix shift
+				local sa=ca-a
+				au+=sa*dau
+				av+=sa*dav
+				tline(ca,y,ceil(b)-1,y,au,av,dau,dav)
+			else
+				nodes[y]={x0,u0,v0}
+			end
+			x0+=dx
+			u0+=du
+			v0+=dv
+		end
+		x0,y0,u0,v0=_x1,_y1,_u1,_v1
+	end
+
+	--[[
 	local v0,v1,v2,v3=
-		cell[1],
-		cell[2],
-		cell[3],
-		cell[4]
+		v[1],
+		v[2],
+		v[3],
+		v[4]
 	line(v0.x,v0.y,v1.x,v1.y,7)
 	line(v1.x,v1.y,v2.x,v2.y,7)
 	line(v2.x,v2.y,v3.x,v3.y,7)
 	line(v3.x,v3.y,v0.x,v0.y,7)
+	]]
 end
 
 function draw_map(x,y,z,a)
@@ -992,7 +1041,7 @@ function draw_map(x,y,z,a)
 	for i,g in pairs(_grid) do
 		-- to cam space
 		local ix,iy=16*(i%9)-x,16*flr(i/9)-y
-		ix,iy=scale*(ca*ix+sa*iy)+8,scale*(-sa*ix+ca*iy)+4
+		ix,iy=scale*(ca*ix+sa*iy)+8,scale*(-sa*ix+ca*iy)+14
 		local outcode=0
 		if ix>16 then outcode=2
 		elseif ix<0 then outcode=1 end
@@ -1000,7 +1049,7 @@ function draw_map(x,y,z,a)
 		elseif iy<0 then outcode=bor(outcode,4) end
 		-- to screen space
 		g.x=8*ix
-		g.y=127-8*iy
+		g.y=8*iy
 		g.outcode=outcode
 	end
 	
@@ -1019,7 +1068,7 @@ function draw_map(x,y,z,a)
 	for i,entry in pairs(_map_lru) do
 		local cell=viz[entry.k]
 		if cell then
-			draw_cell(cell,entry.k-1)
+			draw_cell(cell,i-1)
 			-- update lru time
 			entry.t=time_t
 			-- done
@@ -1032,9 +1081,9 @@ function draw_map(x,y,z,a)
 	for k,cell in pairs(viz) do
 		local mint,mini=32000,#_map_lru+1
 		-- cache full?
-		if mini>6 then
+		if mini>8 then
 			-- find lru entry
-			for i=1,6 do
+			for i=1,8 do
 				local entry=_map_lru[i]
 				if entry.t<mint then
 					mint,mini=entry.t,i
@@ -1050,7 +1099,19 @@ function draw_map(x,y,z,a)
 		end
 		-- draw with fresh cache entry		
 		draw_cell(cell,mini-1)
-	end   
+	end  
+	--[[
+	local y=12
+	for i=1,#_map_lru do
+		local entry=_map_lru[i]
+		print(entry.k..":"..entry.t,2,y,entry.t==time_t and 11 or 2)
+		y+=6
+	end
+	for k,_ in pairs(viz) do
+		print(k,2,y,8)
+		y+=6
+	end
+	]]
 end
 
 -->8
@@ -1083,6 +1144,7 @@ function _init()
 	cls()
 	
 	decompress(0x2000,function(s,i,j)
+		-- if(s==0) s=flr(24+rnd(3))
 		_map[i+128*j]=s
 
 		if fget(s,2) then
@@ -1120,7 +1182,6 @@ function _init()
 end
 
 function _update()
-	time_t+=1
 	-- any futures?
 	for _,f in pairs(futures) do
 		f()
@@ -1135,6 +1196,8 @@ function _update()
 	end
 
 	update_parts()
+
+	time_t+=1
 end
 
 local red_blink={0,1,2,2,8,8,8,2,2,1}
@@ -1143,9 +1206,7 @@ function _draw()
 	local px,py,pz,pangle=plyr:get_pos()
 
 	cls()
-	palt(0,false)
 	draw_map(px,py,pz,pangle)
-	palt()
 
 	-- commit blasts to texmap
 	for _,b in pairs(blasts) do
