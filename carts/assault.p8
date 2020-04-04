@@ -1,5 +1,5 @@
 pico-8 cartridge // http://www.pico-8.com
-version 18
+version 19
 __lua__
 -- assault
 -- by @freds72
@@ -754,18 +754,9 @@ function update_path_async(self)
 	end
 end
 
--- npc on 
-local npc_id=0
+-- npc 
 function make_npc(base,x,y)
-	local angle,hit_t,move_t=0,0,0
-	-- can npc move?
-	local update_path=base.acc and cocreate(update_path_async)
-	local dx,dy=0,0
-	local id=npc_id
-	npc_id+=1
-	-- todo: debug remove
-	local dir_cache,angle_cache={},{}
-	
+	local angle,hit_t=0,0
 	-- quad
 	-- texspace -> world space
 	local w,h=0.5*base.sw/8,0.5*base.sh/8
@@ -776,22 +767,15 @@ function make_npc(base,x,y)
 		{x=0,y=0,ix=-h,iy=-w}
 	}
 	
-	return {
-		hp=base.hp,
-		-- width in world units
-		h=base.h,
-		w=base.w,
-		-- todo: coords in texture space
+	return setmetatable({
 		-- coords in world units
 		x=x,
 		y=y,
-		seek_dly=60,
-		path={},
 		draw=function(self,x0,y0,z0,a0)
 			local ca,sa=cos(a0),-sin(a0)
 			local x1,y1=self.x-x0,self.y-y0
 			local scale=1/z0
-			-- rotate target position
+			-- position in screen space (map units)
 			x1,y1=scale*(ca*x1+sa*y1)+8,scale*(-sa*x1+ca*y1)+14
 			
 			ca,sa=cos(angle-a0),-sin(angle-a0)
@@ -814,6 +798,8 @@ function make_npc(base,x,y)
 			-- visible?
 			if outcode==0 then
 				polytex(quad,base.uv)
+
+				print(angle,8*x1,8*y1,11)
 			end
 			if self.input then
 				local ca,sa=cos(angle),sin(angle)
@@ -838,55 +824,8 @@ function make_npc(base,x,y)
 		end,
 		update=function(self)
 			hit_t-=1
-			if update_path then
-				move_t-=1
-				if move_t<0 and #self.path>0 then
-					-- get result from a*
-					local input=self.input
-					if not input or dist(self.x,self.y,input.x,input.y)<1 then
-						input=pop(self.path)
-						self.input=input
-					end
-					if input then
-						local target_angle=atan2(input.x-self.x,input.y-self.y)
-						-- shortest angle
-						local dtheta=target_angle-angle
-						if dtheta>0.5 then
-							angle+=1
-						elseif dtheta<-0.5 then
-							angle-=1
-						end
-						angle=lerp(angle,target_angle,0.1)
-						
-						local ca,sa=cos(angle),sin(angle)
-						dx=0.1*ca
-						dy=0.1*sa
-						
-						--[[
-						local u,v=normalize(input.x-self.x,input.y-self.y,0.8*base.acc)
-						dx=u
-						dy=v
-						]]
-					end
-				end
+			angle=self:control()
 
-				-- update pos
-				local xarea,yarea=get_area(self,dx,0),get_area(self,0,dy)
-				-- solid?
-				if band(xarea,0x1)==0 then
-					--self.x+=dx
-				end
-				if band(yarea,0x1)==0 then
-					--self.y+=dy
-				end
-				dx*=0.9
-				dy*=0.9
-
-				-- compute path for only 1 actor/frame
-				if id==(time_t%npc_id) then
-					assert(coresume(update_path,self))
-				end
-			end
 			-- todo: provide as parameters?
 			local px,py,pz,pangle=plyr:get_pos() 
 
@@ -896,9 +835,117 @@ function make_npc(base,x,y)
 			--self.x=x
 			--self.y=y
 		end
+	},
+	-- merge with base class
+	{__index=base})
+end
+-- create actors
+local npc_id=0
+function make_tank(x,y)
+	local angle,acc,move_t=0,0.1,0
+	local update_path=cocreate(update_path_async)
+	local dx,dy=0,0
+	-- can npc move?
+	local id=npc_id
+	npc_id+=1
+
+	local light_tank_cls={
+		w=0.8,
+		h=0.8,
+		sh=16,
+		sw=16,
+		uv={
+			0,0,
+			2,0,
+			2,2,
+			0,2},
+		hp=1,
+		-- co-routine data
+		seek_dly=60,
+		path={},
+		control=function(self)
+			move_t-=1
+			if move_t<0 and #self.path>0 then
+				-- get result from a*
+				local input=self.input
+				if not input or dist(self.x,self.y,input.x,input.y)<1 then
+					input=pop(self.path)
+					self.input=input
+				end
+				if input then
+					local target_angle=atan2(input.x-self.x,input.y-self.y)
+					-- shortest angle
+					local dtheta=target_angle-angle
+					if dtheta>0.5 then
+						angle+=1
+					elseif dtheta<-0.5 then
+						angle-=1
+					end
+					angle=lerp(angle,target_angle,0.1)
+					
+					local ca,sa=cos(angle),sin(angle)
+					dx=0.1*ca
+					dy=0.1*sa
+					
+					--[[
+					local u,v=normalize(input.x-self.x,input.y-self.y,0.8*base.acc)
+					dx=u
+					dy=v
+					]]
+				end
+			end
+	
+			-- update pos
+			local xarea,yarea=get_area(self,dx,0),get_area(self,0,dy)
+			-- solid?
+			if band(xarea,0x1)==0 then
+				--self.x+=dx
+			end
+			if band(yarea,0x1)==0 then
+				--self.y+=dy
+			end
+			dx*=0.9
+			dy*=0.9
+	
+			-- compute path for only 1 actor/frame
+			if id==(time_t%npc_id) then
+				assert(coresume(update_path,self))
+			end
+
+			return angle
+		end
 	}
+
+	return make_npc(light_tank_cls,x,y)
 end
 
+function make_heavy_turret(x,y)
+	local angle=0
+	local heavy_turret_cls={
+		sh=32,
+		sw=32,
+		uv={
+			2,0,
+			6,0,
+			6,4,
+			2,4},
+		hp=10,
+		control=function(self)
+			local target_angle=atan2(plyr.x-self.x,-plyr.y+self.y)
+			-- shortest angle
+			local dtheta=target_angle-angle
+			if dtheta>0.5 then
+				angle+=1
+			elseif dtheta<-0.5 then
+				angle-=1
+			end
+			angle=lerp(angle,target_angle,0.1)
+			return angle
+		end
+	}
+	return make_npc(heavy_turret_cls,x,y)
+end
+	
 -->8
 -- map helpers
 function polytex(v,uv)
@@ -1108,32 +1155,9 @@ function _init()
 		mset(t.i,t.j,t.s)
 	end
 	
-	-- create actors
-	local light_tank_cls={
-		w=0.8,
-		h=0.8,
-		sh=16,
-		sw=16,
-		uv={
-			0,0,
-			2,0,
-			2,2,
-			0,2},
-		acc=0.1,
-		hp=1}
-	
-	local heavy_turret_cls={
-		sh=32,
-		sw=32,
-		uv={
-			2,0,
-			6,0,
-			6,4,
-			2,4},
-		hp=10}
-	add(npcs,make_npc(light_tank_cls,33,60))
-	add(npcs,make_npc(heavy_turret_cls,23,35))
-	add(npcs,make_npc(heavy_turret_cls,30,35))
+	add(npcs,make_tank(33,60))
+	add(npcs,make_heavy_turret(23,35))
+	add(npcs,make_heavy_turret(30,35))
 end
 
 function _update()
@@ -1257,7 +1281,7 @@ dddddddd3533333333535d33dddddddd111111111ddddddd11111111daaddddddddddddd33333333
 00000000000000000011000031e66666e888888266666ed300000000000000000000000000000000eeeeee01e0eeeeee0000000dddd666666666667770000000
 000000000000000000000000331d66666e8888266666d53300000088888000000000000000000000eeeeeeeeeeeeeeee000000dd5dd666666666676777000000
 0000000000000000000000003331d6666eeeeee6666d5333000000088800000000000000336667766776677667766633000000555dd666666666676666000000
-00000000000000000000000033331d666666666666d533330000000080000000000000003676677dd776d776d7766763000000155dd66666666667666d000000
+00000000000000000000000033331d666666666666d533330000000080000000000000003676d776d776d776d7766763000000155dd66666666667666d000000
 0000000d6000000000056000333331d6666666666d533333000000000000000000000000d77111111111111111111776000000115dd666666666676dd5000000
 0000090d70900000005676003333331d66666666d533333300000000000000000000000016d11dd11dd11dd11ddd11d6000000011ddd66666666766d50000000
 00009a9d69a900000056760033333331d666666d5333333300000000000000000000000066ddddddddddd4adddddd166000000011ddd66666666766550000000
@@ -1268,10 +1292,10 @@ dddddddd3533333333535d33dddddddd111111111ddddddd11111111daaddddddddddddd33333333
 000fd596795df00000000000d777777dddddddddd7dddddd80000088888000008000000077ddddddddddddddddddd17700000000001490149014900000000000
 000f6d4664d6f000000cc000dd7dd7ddddddddddd77ddddd00000000000000000000000077dddddddddddddddddd117700000000001490149014900000000000
 00096d49f9d6900000c7cc00ddd77dddddddddddd7d7dddd000000000000000000000000d6dddddddddddddddddd11d6000000000014a014a014a00000000000
-00049f1491f9400001cc7c00ddddddddddd77dddd7d7dddd00000000000000000000000066ddddddddddddddddddd16600000000000000000000000000000000
-0001481111841000011cc000dddddddddd7dd7ddd77ddddd000000008000000000000000677dddddddddddddddddd77600000000000000000000000000000000
+00049f1491f9400001cc7c00ddddddddddd77dddd7d7dddd00000000000000000000000066ddddddddddddddddddd16600000000001670167016700000000000
+0001481111841000011cc000dddddddddd7dd7ddd77ddddd000000008000000000000000677dddddddddddddddddd77600000000001670167016700000000000
 000011000011000000110000ddddddddd777777dd7dddddd0000000888000000000000001d76677667766776677667d100000000000000000000000000000000
-000000000000000000000000dddddddddddddddddddddddd000000888880000000000000115d677dd776d776d776d51100000000000000000000000000000000
+000000000000000000000000dddddddddddddddddddddddd0000008888800000000000001156d776d776d776d776d51100000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000d666d66dd66d666732233223233322333443344343334433
 000000000000000000000000000000000000000000000000000000000000000000000000000000005d666660066666762bb22222222222224334444444444443
 0000000d6f0000000000000d600000000000000d600000000000000000000000000000000000000055d666666666676613b22bb2232222223334433443444444
@@ -1334,4 +1358,4 @@ dffbe79144b37a6e5a8ef6e4ee8168a729af7ec3b72b8765dcf9167ceb8051fe9dd7be7d86b5a9ab
 c85cb859013d22103cdec07306ac156ac384c701db3ac24a06a21c4539911de644a00260e0e405349095babc78a853ce9c5863e769fc45b3a8b60c146f7e3055e8441417112191c46a292a33bfa4c472e199da8d059a3a16d1a0050e0c6b453129674475a4b864192485922102c2c621255884923a525a4b492255122423508f
 2af65049e4a3296534a79512a6554ab9592b6574af9612c6594b39692d65b4b79712e65d4bb9792f65f4bf981306614c3989316634c7991326654cb999336674cf9a1346694d39a93566b4d79b13666d4db9b93766f4df26a0e60040209309a4e278020d0784426150b864361d0f88446251383140a25c2e978bf148e4763d1f
 90444d86d371be4327944a655083e1f4fc7f95cc665339a4d66d379c4e6753b9e4f67d3fa05068543a25168d47a4526954ba65369d4fa8546a553aa556ad57ac566b55bae576bd5fb0586c563b2596cd67b45a6d56bb65b6dd6fb85c6e573ba5d6ed77bc5e6f57bbe5f6fd7fc06070583c26170d87c4627158bc66371d8fc864
-72593ca6572d97cc667359bce6773d9fd068745a3d26974da7d46a755abd66b75dafd86c765b3da6d76db7dc6e775bbde6f77dbfe070785c3e27178dc7e4726980
+72593ca6572d97cc667359bce6773d9fd068745a3d26974da7d46a755abd66b75dafd86c765b3da6d76db7dc6e775bbde6f77dbfe070785c3e27178dc7e4726980000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
