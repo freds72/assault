@@ -130,10 +130,12 @@ def lzw_decode(data):
     print(y)
     return bytes(aux)
 
-level_data = xml.parse(os.path.join(local_dir,'level.tmx'))
-layers = level_data.getroot().findall('./layer')
-for layer in layers:
-    print("exporting: {}".format(layer.get('name')))
+def export_layer(layers, name):
+    layer = layers[name]
+    if layer is None:
+        raise Exception("Layer: {} not found.".format(name))
+
+    print("exporting: {}".format(name))
     hexdata = base64.b64decode(layer.find('data').text)
     # convert to bytes (8 bits, not 32)
     data=bytes([])
@@ -146,19 +148,26 @@ for layer in layers:
         data += bytes([j])
     
     lzw = lzw_encode(data)
-    print("orig size:{} bytes -> {} bytes".format(len(data),len(lzw)))
-    
+
     # orig = lzw_decode(lzw)
-    # print("lzw size:{} bytes -> {} bytes".format(len(lzw),len(orig)))
+    print("lzw size:{} bytes -> {} bytes".format(len(lzw),len(data)))
 
     # compressed length (2 bytes)
     l = "{:04x}".format(len(lzw))
+    # swap bytes
     s = l[2:4] + l[0:2]
     # data
     for b in lzw:
         s += "{:02x}".format(b)
+    return s
 
-    #map_data=hexdata
-    #if len(map_data)>0:
-    print("__map__")
-    print(re.sub("(.{256})", "\\1\n", s, 0, re.DOTALL))
+level_data = xml.parse(os.path.join(local_dir,'level.tmx'))
+layers = {layer.get('name'):layer for layer in level_data.getroot().findall('./layer')}
+
+s = export_layer(layers, 'level')
+s += export_layer(layers, 'actors')
+
+#map_data=hexdata
+#if len(map_data)>0:
+print("__map__")
+print(re.sub("(.{256})", "\\1\n", s, 0, re.DOTALL))

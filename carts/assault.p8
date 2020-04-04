@@ -148,108 +148,6 @@ function collide(a,b)
 	end
 end
 
--- in-memory sprite
--- includes support for rotated sprites
-function make_memspr(sx,sy,w,h,nangles,tc)
-	nangles=nangles or 1
-	-- transparent color
-	tc=tc or 0
-
-	-- rotated versions
-	local angles={}
-	for i=0,nangles-1 do
-		local a=i/nangles-0.25
-		local spr=rspr(sx,sy,flr(w/8),a,tc)
-
-		-- convert sprite to 8 pixel dword's
-		local s,smask,hitmask,dw={},{},{},0		
-		for y=0,h-1 do
-			local mask,hitb,b,bmask=0x1000,0
-			for x=0,w-1 do
-				local c=spr[x+y*w]
-				b=bor(b or 0,c*mask)
-				bmask=bor(bmask or 0,(c==tc and 0xf or 0)*mask)
-				-- warn: works only for up to 32 pixel wide sprites
-				if(c!=tc) hitb=bor(hitb,lshr(0x8000,x))
-				-- shift to next row
-				mask=lshr(mask,4)
-				if mask==0 then
-					mask=0x1000
-					s[dw],smask[dw],b,bmask=b,bmask
-					dw+=1
-				end
-			end
-			if b then
-				s[dw],smask[dw]=b,bmask
-				dw+=1
-			end
-			-- dword padding
-			s[dw],smask[dw]=0,0xffff.ffff
-			dw+=1
-			-- hitmask
-			hitmask[y]=hitb
-		end	
-
-		angles[i]={s=s,smask=smask,hitmask=hitmask}
-	end		
-
-	-- default sprite
-	local s,smask,hitmask=angles[0].s,angles[0].smask,angles[0].hitmask
-
-	-- width in dword unit (e.g. texmap unit) +padding
-	w=flr(w/8)+1
-
-	return {
-		rotate=function(self,angle)
-			-- select sprite cache entry
-			local cache=angles[flr(nangles*((angle%1+1)%1))]
-			s,smask,hitmask=cache.s,cache.smask,cache.hitmask
-
-			-- test
-
-			self.hitmask=cache.hitmask
-		end,
-		draw=function(self,dst,x,y,blink)
-
-			-- dword boundary
-			local ix=flr(x/8)
-			-- localize globals
-			local w,s,smask,shift,dx=w,s,smask,shl(flr(x)-8*ix,2),ix
-			local backup,bmask={},lshr(0xffff.ffff,shift)
-			y=flr(y)
-			for j=0,h-1 do
-				local srcx,dstx,v0mask,v0=j*w,bor(dx,shr(j+y,16)),0xffff.ffff
-				for i=0,w-1 do
-					-- stride (shifted)
-					local v1,v1mask=blink and 0x7777.7777 or rotr(s[srcx],shift),rotr(smask[srcx],shift)						
-					local c,v,vmask=
-						-- back color
-						dst[dstx],
-						-- current stride + previous
-						bor(
-							band(v1,bmask),
-							band(v0,bnot(bmask))),
-						-- stride transparency mask + previous
-						bor(
-							band(v1mask,bmask),
-							band(v0mask,bnot(bmask)))
-					-- backup background color
-					backup[dstx]=c
-					-- merge with back color										
-					dst[dstx]=bor(
-						band(c,vmask),
-						band(v,bnot(vmask)))
-									
-					v0,v0mask=v1,v1mask
-					srcx+=1
-					dstx+=1
-				end
-			end
-			return backup
-		end
-	}
-end
-
 -->8
 
 -- game globals
@@ -514,7 +412,7 @@ function make_plyr(x,y,z,angle)
 		end
 	}
 end
-local plyr=make_plyr(107,68,20,0)
+local plyr=make_plyr(41,54,2,0)
 
 -- check for the given tile flag
 function fmget(x,y)
@@ -642,7 +540,7 @@ local blast_circles={
 	{{r=8,c=0,fp=0x5a5a.ff,fn=circ}},
 	{{r=8,c=0,fp=0x5a5a.ff,fn=circ}}
    }
-local blast_spr=make_memspr(80,32,16,16,nil,14)
+--local blast_spr=make_memspr(80,32,16,16,nil,14)
 local blast_cls={
 	draw=function(self,x,y)
 		palt(0,false)
@@ -732,16 +630,17 @@ function decompress(mem,fn)
 	mem+=2
     while index < len or buffer_bits >= code_bits do
         -- read buffer
-        while index < len and buffer_bits < code_bits do
-			buffer=bor(shl(buffer, 8),shr(peek(mem+index),16))
-        	buffer_bits += 8
-			index += 1
+		while index < len and buffer_bits < code_bits do
+			buffer=bor(shl(buffer,8),shr(peek(mem),16))
+        	buffer_bits+=8
+			index+=1
+			mem+=1
 		end
         -- find word
-        buffer_bits -= code_bits
-        local key = lshr(buffer,buffer_bits)
-		buffer = band(buffer,shl(0x0.0001,buffer_bits)-0x0.0001)
-		local word = code[key]
+        buffer_bits-=code_bits
+        local key=lshr(buffer,buffer_bits)
+		buffer=band(buffer,shl(0x0.0001,buffer_bits)-0x0.0001)
+		local word=code[key]
 		if(not word) word=array_add(prefix, prefix[1])
 
         -- store word
@@ -764,6 +663,7 @@ function decompress(mem,fn)
 			if(x>127) x=0 y+=1 
 		end
 	end
+	return mem
 end
 
 -->8
@@ -857,7 +757,6 @@ end
 -- npc on 
 local npc_id=0
 function make_npc(base,x,y)
-	local spr,cache=base.spr,{}
 	local angle,hit_t,move_t=0,0,0
 	-- can npc move?
 	local update_path=base.acc and cocreate(update_path_async)
@@ -866,6 +765,17 @@ function make_npc(base,x,y)
 	npc_id+=1
 	-- todo: debug remove
 	local dir_cache,angle_cache={},{}
+	
+	-- quad
+	-- texspace -> world space
+	local w,h=0.5*base.sw/8,0.5*base.sh/8
+	local quad={
+		{x=0,y=0,ix=-h,iy=w},
+		{x=0,y=0,ix=h,iy=w},
+		{x=0,y=0,ix=h,iy=-w},
+		{x=0,y=0,ix=-h,iy=-w}
+	}
+	
 	return {
 		hp=base.hp,
 		-- width in world units
@@ -877,24 +787,41 @@ function make_npc(base,x,y)
 		y=y,
 		seek_dly=60,
 		path={},
-		erase=function(self,texmap)
-			restoremap(angle_cache,texmap)
-			restoremap(dir_cache,texmap)
-			-- remove self from texture mapr
-			restoremap(cache,texmap)
-		end,
-		draw=function(self,texmap)
-			-- select rotated sprite
-			spr:rotate(angle)
-			cache=spr:draw(texmap,self.x*8-base.sw/2,self.y*8-base.sh/2,hit_t>0)
-
+		draw=function(self,x0,y0,z0,a0)
+			local ca,sa=cos(a0),-sin(a0)
+			local x1,y1=self.x-x0,self.y-y0
+			local scale=1/z0
+			-- rotate target position
+			x1,y1=scale*(ca*x1+sa*y1)+8,scale*(-sa*x1+ca*y1)+14
+			
+			ca,sa=cos(angle-a0),-sin(angle-a0)
+			local outcode=0xffff
+			for _,g in pairs(quad) do
+				-- rotate in local space
+				local ix,iy=g.ix,g.iy
+				-- translate to cam space
+				ix,iy=scale*(ca*ix-sa*iy)+x1,scale*(sa*ix+ca*iy)+y1
+				local code=0
+				if ix>16 then code=2
+				elseif ix<0 then code=1 end
+				if iy>16 then code+=8
+				elseif iy<0 then code+=4 end
+				outcode=band(outcode,code)
+				-- to screen space
+				g.x=8*ix
+				g.y=8*iy
+			end
+			-- visible?
+			if outcode==0 then
+				polytex(quad,base.uv)
+			end
 			if self.input then
 				local ca,sa=cos(angle),sin(angle)
 				local x0,y0=8*self.x,8*self.y
 				local x1,y1=8*self.input.x,8*self.input.y
-				dir_cache=texline(texmap,x0,y0,x1,y1,11)
+				line(x0,y0,x1,y1,11)
 				x1,y1=x0+16*ca,y0+16*sa
-				angle_cache=texline(texmap,x0,y0,x1,y1,8)
+				line(x0,y0,x1,y1,8)
 			end
 		end,
 		die=function(self)
@@ -922,6 +849,7 @@ function make_npc(base,x,y)
 					end
 					if input then
 						local target_angle=atan2(input.x-self.x,input.y-self.y)
+						-- shortest angle
 						local dtheta=target_angle-angle
 						if dtheta>0.5 then
 							angle+=1
@@ -946,10 +874,10 @@ function make_npc(base,x,y)
 				local xarea,yarea=get_area(self,dx,0),get_area(self,0,dy)
 				-- solid?
 				if band(xarea,0x1)==0 then
-					self.x+=dx
+					--self.x+=dx
 				end
 				if band(yarea,0x1)==0 then
-					self.y+=dy
+					--self.y+=dy
 				end
 				dx*=0.9
 				dy*=0.9
@@ -973,16 +901,10 @@ end
 
 -->8
 -- map helpers
-function draw_cell(v,offset)
-	offset*=16
-	local uv={
-		offset,0,
-		16+offset,0,
-		16+offset,16,
-		offset,16}
-	local p0,nodes=v[4],{}
+function polytex(v,uv)
+	local p0,nodes=v[#v],{}
 	local x0,y0,u0,v0=p0.x,p0.y,uv[7],uv[8]
-	for i=1,4 do
+	for i=1,#v do
 		local p1=v[i]
 		local x1,y1,u1,v1=p1.x,p1.y,uv[i*2-1],uv[i*2]
 		local _x1,_y1,_u1,_v1=x1,y1,u1,v1
@@ -1001,7 +923,7 @@ function draw_cell(v,offset)
 			if x then
 				--rectfill(x[1],y,x0,y,offset/16)
 				
-				local a,au,av,b,bu,bv=x[1],x[2],x[3],x0,u0,v0
+				local a,au,av,b,bu,bv=x.x,x.u,x.v,x0,u0,v0
 				if(a>b) a,au,av,b,bu,bv=b,bu,bv,a,au,av
 				local dab=b-a
 				local dau,dav=(bu-au)/dab,(bv-av)/dab
@@ -1012,7 +934,7 @@ function draw_cell(v,offset)
 				av+=sa*dav
 				tline(ca,y,ceil(b)-1,y,au,av,dau,dav)
 			else
-				nodes[y]={x0,u0,v0}
+				nodes[y]={x=x0,u=u0,v=v0}
 			end
 			x0+=dx
 			u0+=du
@@ -1040,13 +962,13 @@ function draw_map(x,y,z,a)
 	-- project all potential tiles
 	for i,g in pairs(_grid) do
 		-- to cam space
-		local ix,iy=16*(i%9)-x,16*flr(i/9)-y
+		local ix,iy=32*(i%5)-x,32*flr(i/5)-y
 		ix,iy=scale*(ca*ix+sa*iy)+8,scale*(-sa*ix+ca*iy)+14
 		local outcode=0
 		if ix>16 then outcode=2
 		elseif ix<0 then outcode=1 end
-		if iy>16 then outcode=bor(outcode,8)
-		elseif iy<0 then outcode=bor(outcode,4) end
+		if iy>16 then outcode+=8
+		elseif iy<0 then outcode+=4 end
 		-- to screen space
 		g.x=8*ix
 		g.y=8*iy
@@ -1068,7 +990,12 @@ function draw_map(x,y,z,a)
 	for i,entry in pairs(_map_lru) do
 		local cell=viz[entry.k]
 		if cell then
-			draw_cell(cell,i-1)
+			local offset=32*i
+			polytex(cell,{
+				offset,0,
+				32+offset,0,
+				32+offset,32,
+				offset,32})
 			-- update lru time
 			entry.t=time_t
 			-- done
@@ -1081,9 +1008,9 @@ function draw_map(x,y,z,a)
 	for k,cell in pairs(viz) do
 		local mint,mini=32000,#_map_lru+1
 		-- cache full?
-		if mini>8 then
+		if mini>3 then
 			-- find lru entry
-			for i=1,8 do
+			for i=1,3 do
 				local entry=_map_lru[i]
 				if entry.t<mint then
 					mint,mini=entry.t,i
@@ -1093,12 +1020,17 @@ function draw_map(x,y,z,a)
 		-- add/reuse cache entry
 		_map_lru[mini]={k=k,t=time_t}
 		-- fill cache entry
-		local mem=0x2000+(mini-1)*16
+		local mem=0x2000+mini*32
 		for base,v in pairs(_cells_map[k]) do
-			poke4(mem+4*base,v)
+			poke4(mem+base,v)
 		end
 		-- draw with fresh cache entry		
-		draw_cell(cell,mini-1)
+		local offset=32*mini
+		polytex(cell,{
+			offset,0,
+			32+offset,0,
+			32+offset,32,
+			offset,32})
 	end  
 	--[[
 	local y=12
@@ -1120,30 +1052,27 @@ function _init()
 	-- collision map
 	_map,_cells,_cells_map,_grid,_map_lru={},{},{},{},{}
 	-- 
+	local grid_w=4
 	-- grid_w intervals = grid_w+1^2 points
-	for i=0,9*9-1 do
+	for i=0,(grid_w+1)*(grid_w+1)-1 do
 		_grid[i]={x=0,y=0,outcode=0}
 	end
-	-- debug
-	local cell_count={}
 	-- direct link to grid vertices?
-	for i=0,63 do
+	for i=0,grid_w*grid_w-1 do
 		-- cell coords in grid space 
 		-- 5: account for 'additional' 5th point
-		local ci=(i%8)+9*flr(i/8)
+		local ci=(i%grid_w)+(grid_w+1)*flr(i/grid_w)
 		local tiles={
 			_grid[ci],
 			_grid[ci+1],
-			_grid[ci+8+2],
-			_grid[ci+8+1]
+			_grid[ci+grid_w+2],
+			_grid[ci+grid_w+1]
 		}
 		_cells[i]=tiles
 		_cells_map[i]={}
 	end
 
-	cls()
-	
-	decompress(0x2000,function(s,i,j)
+	local mem=decompress(0x2000,function(s,i,j)
 		-- if(s==0) s=flr(24+rnd(3))
 		_map[i+128*j]=s
 
@@ -1151,19 +1080,15 @@ function _init()
 			jumppads[i+128*j]=3
 		end
 
-		-- cell coord (128x128)->(8x8)
-		local ci,cj=flr(i/16),flr(j/16)
-		local ck=bor(ci,shl(cj,3))
+		-- cell coord (128x128)->(4x4)
+		local ci,cj=flr(i/32),flr(j/32)
+		local ck=bor(ci,shl(cj,2))
 		local cell_map=_cells_map[ck]
 		assert(cell_map,ci.."/"..cj..":"..ck)
 		-- cell is 4*dword with a stride of 128/4 = 32
 		-- cell entry is packed as a dword
-		-- todo: simplify...
-		local k=flr(band(i,15)/4)+shl(band(j,15),5)
+		local k=4*(flr(band(i,31)/4)+shl(band(j,31),5))
 		local m=cell_map[k] or 0
-		local c=cell_count[ck] or 0
-		c+=1
-		cell_count[ck]=c
 		-- shift 
 		m=bor(m,shl(0x0.0001,8*band(i,3))*s)
 		cell_map[k]=m
@@ -1173,12 +1098,42 @@ function _init()
 		--rectfill(ci*16,cj*16,(ci+1)*16-1,(cj+1)*16-1,1)
 		--print(ck.."\n"..c,ci*16+1,cj*16+1,2)
 	end)
-
-	cls()
-	for k,v in pairs(_cells_map[2]) do
-		print((4*(k%4)+32).."|"..flr(k/32)..":"..tostr(v,true))
+	-- decompress actors
+	-- avoid overwriting ram while reading..
+	local tmp={}
+	decompress(mem,function(s,i,j)
+		if(s!=0) add(tmp,{i=i,j=j,s=s})
+	end)
+	for _,t in pairs(tmp) do
+		mset(t.i,t.j,t.s)
 	end
-	--stop()
+	
+	-- create actors
+	local light_tank_cls={
+		w=0.8,
+		h=0.8,
+		sh=16,
+		sw=16,
+		uv={
+			0,0,
+			2,0,
+			2,2,
+			0,2},
+		acc=0.1,
+		hp=1}
+	
+	local heavy_turret_cls={
+		sh=32,
+		sw=32,
+		uv={
+			2,0,
+			6,0,
+			6,4,
+			2,4},
+		hp=10}
+	add(npcs,make_npc(light_tank_cls,33,60))
+	add(npcs,make_npc(heavy_turret_cls,23,35))
+	add(npcs,make_npc(heavy_turret_cls,30,35))
 end
 
 function _update()
@@ -1216,7 +1171,7 @@ function _draw()
 
 	-- draw
 	for i=1,#npcs do
-		npcs[i]:draw()
+		npcs[i]:draw(px,py,pz,pangle)
 	end
 
 	plyr:draw()
@@ -1377,4 +1332,6 @@ d825959e74150305cc59e6a52a7f40dbc10c441156627aafa7aafab89f596a1ad402adeb89ea7ca9
 dbb585dcb41dd2e1e05f0daf57d51b1da5bcdf17c92383d52a74a790d5f8dd2813d9ab3d3341b4f1ee2f87b3a6a97650847755bf1ecf813deb9a7df8cdf2a6c075ac8f9959fb4594acb8e5d48b94c77a8e9b9fe9f8ddcb94ead67f16cf9f66cc9513d8762c3ba6df79ca63969fbd2f41c09efa2f2d11f356665e62e99c209266
 dffbe79144b37a6e5a8ef6e4ee8168a729af7ec3b72b8765dcf9167ceb8051fe9dd7be7d86b5a9ab8344609572ae3465ccdfbf774899a019ca75e5517e3ff80100601328380ab2041715d45a0b53db5545c20529d53872d6c40076cda51a1d3387061613f183a598ec9c421caa94d29e536a6d4e2ac7d6f4ce5bc78547209e42
 c85cb859013d22103cdec07306ac156ac384c701db3ac24a06a21c4539911de644a00260e0e405349095babc78a853ce9c5863e769fc45b3a8b60c146f7e3055e8441417112191c46a292a33bfa4c472e199da8d059a3a16d1a0050e0c6b453129674475a4b864192485922102c2c621255884923a525a4b492255122423508f
-2af65049e4a3296534a79512a6554ab9592b6574af9612c6594b39692d65b4b79712e65d4bb9792f65f4bf981306614c3989316634c7991326654cb999336674cf9a1346694d39a93566b4d79b13666d4db9b93766f4df26a0
+2af65049e4a3296534a79512a6554ab9592b6574af9612c6594b39692d65b4b79712e65d4bb9792f65f4bf981306614c3989316634c7991326654cb999336674cf9a1346694d39a93566b4d79b13666d4db9b93766f4df26a0e60040209309a4e278020d0784426150b864361d0f88446251383140a25c2e978bf148e4763d1f
+90444d86d371be4327944a655083e1f4fc7f95cc665339a4d66d379c4e6753b9e4f67d3fa05068543a25168d47a4526954ba65369d4fa8546a553aa556ad57ac566b55bae576bd5fb0586c563b2596cd67b45a6d56bb65b6dd6fb85c6e573ba5d6ed77bc5e6f57bbe5f6fd7fc06070583c26170d87c4627158bc66371d8fc864
+72593ca6572d97cc667359bce6773d9fd068745a3d26974da7d46a755abd66b75dafd86c765b3da6d76db7dc6e775bbde6f77dbfe070785c3e27178dc7e4726980
