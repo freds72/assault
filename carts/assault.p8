@@ -17,13 +17,6 @@ function cam_update()
 	end
 end
 
-function clone(src,dst)
-	for k,v in pairs(src) do
-		dst[k]=v
-	end
-	return dst
-end
-
 function lerp(a,b,t)
 	return a*(1-t)+t*b
 end
@@ -76,6 +69,24 @@ function fade(i)
 	end
 end
 
+-- coroutine helpers
+
+-- delayed functions
+local _futures,_co_id={},0
+-- registers a new coroutine
+function do_async(fn)
+	_futures[_co_id]=cocreate(fn)
+	-- no more than 64 co-routines active at any one time
+	-- allow safe fast delete
+	_co_id=(_co_id+1)%64
+end
+-- wait until timer
+function wait_async(t,fn)
+	for i=1,t do
+		yield()
+	end
+end
+
 -->8 
 -- return a rotated version of the sprite in a table
 function rspr(sx,sy,w,a,tc)
@@ -106,9 +117,14 @@ function rspr(sx,sy,w,a,tc)
 	return s
 end
 
--- create a 'hit' bitmask from sprite
-function make_hitmask(sx,sy,sw,sh,tc)
-	assert(flr(sw/32)<=1,"32+pixels wide sprites not yet supported")
+-- convert a sprite number to a sprite stucture
+function make_sprite(s,sw,sh)
+	return {spr=s,ssx=band(s*8,127),ssy=8*flr(s/16),sw=sw or 8,sh=sh or 8}
+end
+-- attach hitmask to sprite instance
+function with_hitmask(sprite,tc)
+	local sx,sy,sw,sh=sprite.ssx,sprite.ssy,sprite.sw,sprite.sh
+	assert(sw<=32,"32+pixels wide sprites not supported")
 	tc=tc or 0
 	local bitmask={}
 	for j=0,sh-1 do
@@ -119,13 +135,14 @@ function make_hitmask(sx,sy,sw,sh,tc)
 		end
 		bitmask[j]=bits
 	end
-	return bitmask
+	-- attach it
+	sprite.hitmask=bitmask
+	return sprite
 end
 
 -- returns true if hitmasks intersects
 function intersect_bitmasks(a,b,x,ymin,ymax)
-	-- todo: store texmap coords in object
-	local by=flr(8*a.y)-flr(8*b.y)
+	local by=flr(a.sy)-flr(b.sy)
 	for y=ymin,ymax do
 	 -- out of boud b mask returns nil
 	 -- nil is evaluated as zero :]
@@ -133,18 +150,18 @@ function intersect_bitmasks(a,b,x,ymin,ymax)
 	end
 end
 
+-- note: a/b must be in screen coords
 function collide(a,b)
 	-- a is left most
-	if(a.x>b.x) a,b=b,a
-	-- screen coords
-	local ax,ay,bx,by=flr(8*a.x),flr(8*a.y),flr(8*b.x),flr(8*b.y)
-	local xmax,ymax=bx+b.w,by+b.h
+	if(a.sx>b.sx) a,b=b,a
+	local ax,ay,bx,by=flr(a.sx),flr(a.sy),flr(b.sx),flr(b.sy)
+	local xmax,ymax=bx+b.sw,by+b.sh
 	if ax<xmax and 
-		ax+a.w>bx and
+		ax+a.sw>bx and
 		ay<ymax and
-		ay+a.w>by then
+		ay+a.sw>by then
 	 	-- collision coords in 'a' space
- 		return true,a,b,bx-ax,max(by-ay),min(by+b.h,ay+a.h)-ay
+ 		return true,a,b,bx-ax,max(by-ay),min(by+b.sh,ay+a.sh)-ay
 	end
 end
 
@@ -155,9 +172,6 @@ local time_t=0
 local jumppads={}
 local _map,_cells,_cells_map,_grid,_map_lru
 
--- delayed functions
-local futures={}
-
 -- todo: remove for optimisation
 local gravity=-0.03
 
@@ -165,27 +179,39 @@ local gravity=-0.03
 function make_plyr(x,y,z,angle)
 	local reload_ttl,reload_nuke_ttl,acc,da,dz,mortar_angle=0,0,0,0,0,0
 	local states,state,nuke_mode
-	local sprite=96
+	local default_sprite=with_hitmask(make_sprite(96,16,16))
 	local flip_sprites,mortar_sprites={
-		[-1]={128,130,132},
-		[1]={132,130,128}},
-		{96,134,136}
-
+		[-1]={
+			with_hitmask(make_sprite(128,16,16)),
+			with_hitmask(make_sprite(130,16,16)),
+			with_hitmask(make_sprite(132,16,16))},
+		[1]={
+			with_hitmask(make_sprite(132,16,16)),
+			with_hitmask(make_sprite(130,16,16)),
+			with_hitmask(make_sprite(128,16,16))}},
+		{
+			with_hitmask(make_sprite(96,16,16)),
+			with_hitmask(make_sprite(134,16,16)),
+			with_hitmask(make_sprite(136,16,16))
+		}
+	
+	-- select default
+	local sprite=default_sprite
+	
 	-- nuke velocity
 	-- todo: remove
 	local nuke_v=0.5
 	
 	-- player-specific particles
 	-- regular bullet
-	local bullet_cls={
-		sx=16,sy=56,
+	local bullet_cls=with_hitmask({
+		ssx=16,ssy=56,
 		sw=8,sh=8,
 		kind=0,
-		side=2,
-		hitmask=make_hitmask(16,56,8,8)
-	}
+		side=2
+	})
 	local nuke_shell_cls={
-		sx=16,sy=48,
+		ssx=16,ssy=48,
 		sw=8,sh=8,
 		kind=1
 	}
@@ -197,7 +223,7 @@ function make_plyr(x,y,z,angle)
 
 	function fire_bullet(ca,sa)
 		if btn(5) and reload_ttl<0 then
-			make_part(bullet_cls,x,y,1,-sa/2,-ca/2)
+			make_bullet(bullet_cls,x,y,1,-sa/2,-ca/2)
 			reload_ttl=10
 		end
 	end
@@ -225,7 +251,7 @@ function make_plyr(x,y,z,angle)
 	states={
 		drive=function()
 			local ttl=0
-			sprite,z,dz,nuke_mode=96,1,0
+			sprite,z,dz,nuke_mode=default_sprite,1,0
 			return function(self)
 				-- flip?
 				if btn(4) then
@@ -368,12 +394,18 @@ function make_plyr(x,y,z,angle)
 		y=y,
 		w=0.4,
 		h=0.4,
+		-- sprite width
+		sw=16,
+		sh=16,
+		-- screen pos
+		sx=54,
+		sy=106,
 		get_pos=function()
 			return x,y,z,angle
 		end,
 		draw=function(self)
 			-- player
-			spr(sprite,56,104,2,2)
+			spr(sprite.spr,self.sx,self.sy,2,2)
 
 			if nuke_mode then
 				-- nuke estimated impact marker
@@ -403,6 +435,8 @@ function make_plyr(x,y,z,angle)
 			reload_ttl-=1
 			reload_nuke_ttl-=1
 			state(self)
+			-- export current hitmask
+			self.hitmask=sprite.hitmask
 
 			-- "export" public variables
 			self.x=x
@@ -433,39 +467,64 @@ function get_area(a,dx,dy)
 			fmget(x+w,y+h)))
 end
 
--- particles: displayed on top of texture map
--- each particle is rotated
-local parts={}
-function update_parts()
+-- particles: do not interact with actors or background
+-- bullets: interact with actors or background + can spawn particles
+local _parts,_bullets={},{}
+
+function update_parts(parts)
+	local px,py,pz,pangle=plyr:get_pos()
+	local ca,sa=cos(pangle),sin(pangle)
+
 	for i,p in pairs(parts) do
 		p.t+=1
 		-- elapsed?
+		-- todo: fix
 		if(p.ttl and p.t>=p.ttl) parts[i]=nil break
 
-		-- bullet
+		-- custom update?
 		if p.update then
-			parts[i]=p:update()			
+			parts[i]=p:update()
+		-- standard bullet			
 		elseif p.kind==0 then
 			local x0,y0=p.x,p.y
 			local x1,y1=x0+p.dx,y0+p.dy
 				
-			-- hit npc
-			-- todo:
+			-- hit player?
+			if p.side==1 and pz<=1 then
+				local x,y=x1-px,y1-py
+				-- screen position
+				p.sx=64+shl(ca*x-sa*y,3)-p.sw/2
+				p.sy=112+shl(sa*x+ca*y,3)-p.sh/2
+
+				local col,a,b,x0,y0,y1=collide(p,plyr)
+				if col and intersect_bitmasks(a,b,x0,y0,y1) then
+					local ax,ay=flr(a.sx),flr(a.sy)
+					p.rect={ax+x0,ay+y0,ax+a.sw-1,ay+y1-1}
+					--assert(false,"hit")
+					--parts[i]=nil
+					--goto die
+				end
+			else
+				-- todo:
+			end
 
 			-- hit wall?
 			if solid(x0,y1) or solid(x1,y0) then
 				parts[i]=nil
+				-- effect
+				make_part({sw=2,c=7,ttl=2+rnd(2),kind=5},x1,y1,1)
 			else
 				p.x=x1
 				p.y=y1
 			end
+::die::
 		-- nuke
 		elseif p.kind==1 then
 			p.x+=p.dx
 			p.y+=p.dy
 			p.z+=p.dz
 			if p.z<=1 then
-				add(futures,function() make_nuke(p.x,p.y) end)
+				do_async(function() make_nuke(p.x,p.y) end)
 				parts[i]=nil
 			end
 			-- gravity
@@ -474,7 +533,7 @@ function update_parts()
 	end
 end
 
-function draw_parts(x0,y0,z0,angle)
+function draw_parts(parts,x0,y0,z0,angle)
 	local ca,sa=cos(angle),sin(angle)
 	for _,p in pairs(parts) do
 		-- actual "depth"
@@ -490,16 +549,24 @@ function draw_parts(x0,y0,z0,angle)
 				local sx,sy,w=48,47,17
 				if(time_t%8<4) sx,sy,w=61,32,13
 				sspr(sx,sy,w,w,dx-w/2,dy-w/2)
+			elseif p.kind==5 then
+				-- bullet impact
+				circfill(dx,dy,w,p.c)
 			else
-				-- todo: select rotated sprite
-				sspr(p.sx,p.sy,p.sw,p.sh,dx-w/2,dy-h/2,w,h)
+				sspr(p.ssx,p.ssy,p.sw,p.sh,dx-w/2,dy-h/2,w,h)
+				-- debug
+				if p.rect then
+					local r=p.rect
+					rect(r[1],r[2],r[3],r[4],8)
+					p.rect=nil
+				end
 			end
 		end
 	end
 end
 
 function make_part(base_cls,x,y,z,dx,dy,dz)
-	return add(parts,clone(base_cls,{
+	return add(_parts,setmetatable({
 		-- age
 		t=0,
 		x=x,
@@ -508,24 +575,37 @@ function make_part(base_cls,x,y,z,dx,dy,dz)
 		dx=dx or 0,
 		dy=dy or 0,
 		dz=dz or 0
-	}))
+	},
+	{__index=base_cls}))
+end
+
+function make_bullet(base_cls,x,y,z,dx,dy,dz)
+	return add(_bullets,setmetatable({
+		-- age
+		t=0,
+		x=x,
+		y=y,
+		z=z or 1,
+		dx=dx or 0,
+		dy=dy or 0,
+		dz=dz or 0
+	},
+	{__index=base_cls}))
 end
 
 -- enemy bullets
-local small_bullet_cls={
-	sx=16,sy=40,
+local small_bullet_cls=with_hitmask({
+	ssx=16,ssy=40,
 	sw=8,sh=8,
 	kind=0,
-	side=1,
-	hitmask=make_hitmask(16,40,8,8)
-}
-local large_bullet_cls={
-	sx=16,sy=32,
+	side=1
+})
+local large_bullet_cls=with_hitmask({
+	ssx=16,ssy=32,
 	sw=8,sh=8,
 	kind=0,
-	side=1,
-	hitmask=make_hitmask(16,32,8,8)
-}
+	side=1
+})
 
 -- blast
 
@@ -920,7 +1000,7 @@ function make_tank(x,y)
 end
 
 function make_heavy_turret(x,y)
-	local angle=0
+	local angle,reload_ttl=0,0
 	local heavy_turret_cls={
 		sh=32,
 		sw=32,
@@ -931,7 +1011,9 @@ function make_heavy_turret(x,y)
 			2,4},
 		hp=10,
 		control=function(self)
-			local target_angle=atan2(plyr.x-self.x,-plyr.y+self.y)
+			local x,y=self.x,self.y
+			-- atan2 is fast enough
+			local target_angle=atan2(plyr.x-x,-plyr.y+y)
 			-- shortest angle
 			local dtheta=target_angle-angle
 			if dtheta>0.5 then
@@ -940,7 +1022,26 @@ function make_heavy_turret(x,y)
 				angle-=1
 			end
 			angle=lerp(angle,target_angle,0.1)
-			return angle
+
+			-- close enough?
+			reload_ttl-=1
+			if reload_ttl<0 and dist(x,y,plyr.x,plyr.y)<20 then
+				reload_ttl=40
+				local ca,sa=cos(angle),-sin(angle)
+				-- center position
+				local w,cx,cy=1.5/3,x+2*ca,y+2*sa
+				for i=-1,1 do
+					do_async(function()
+						wait_async((i+1)*10)
+						-- still valid?
+						if self.hp>0 then
+							make_bullet(large_bullet_cls,cx-i*sa*w,cy+i*ca*w,1,0.12*ca,0.12*sa)				
+						end
+					end)
+				end
+			end
+			-- accomate sprite orientation
+			return angle+0.25
 		end
 	}
 	return make_npc(heavy_turret_cls,x,y)
@@ -1121,7 +1222,8 @@ function _init()
 
 	local mem=decompress(0x2000,function(s,i,j)
 		-- if(s==0) s=flr(24+rnd(3))
-		_map[i+128*j]=s
+		-- no need to record static tiles
+		if(s!=0) _map[i+128*j]=s
 
 		if fget(s,2) then
 			jumppads[i+128*j]=3
@@ -1162,10 +1264,14 @@ end
 
 function _update()
 	-- any futures?
-	for _,f in pairs(futures) do
-		f()
+	for k,f in pairs(_futures) do
+		local cs=costatus(f)
+		if cs=="suspended" then
+			assert(coresume(f))
+		elseif cs=="dead" then
+			_futures[k]=nil
+		end
 	end
-	futures={}
 
 	cam_update()
 
@@ -1174,7 +1280,8 @@ function _update()
 		npcs[i]:update()
 	end
 
-	update_parts()
+	update_parts(_bullets)
+	update_parts(_parts)
 
 	time_t+=1
 end
@@ -1200,7 +1307,8 @@ function _draw()
 
 	plyr:draw()
 
-	draw_parts(px,py,pz,pangle)
+	draw_parts(_bullets,px,py,pz,pangle)
+	draw_parts(_parts,px,py,pz,pangle)
 
 	--[[
 	if col then
