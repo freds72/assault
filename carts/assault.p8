@@ -155,10 +155,9 @@ function collide(a,b)
 	-- a is left most
 	if(a.sx>b.sx) a,b=b,a
 	local ax,ay,bx,by=flr(a.sx),flr(a.sy),flr(b.sx),flr(b.sy)
-	local xmax,ymax=bx+b.sw,by+b.sh
-	if ax<xmax and 
+	if ax<bx+b.sw and 
 		ax+a.sw>bx and
-		ay<ymax and
+		ay<by+b.sh and
 		ay+a.sw>by then
 	 	-- collision coords in 'a' space
  		return true,a,b,bx-ax,max(by-ay),min(by+b.sh,ay+a.sh)-ay
@@ -170,6 +169,7 @@ end
 -- game globals
 local time_t=0
 local jumppads={}
+local npcs={}
 local _map,_cells,_cells_map,_grid,_map_lru
 
 -- todo: remove for optimisation
@@ -205,12 +205,14 @@ function make_plyr(x,y,z,angle)
 	-- player-specific particles
 	-- regular bullet
 	local bullet_cls=with_hitmask({
+		ttl=30,
 		ssx=16,ssy=56,
 		sw=8,sh=8,
 		kind=0,
 		side=2
 	})
 	local nuke_shell_cls={
+		ttl=90,
 		ssx=16,ssy=48,
 		sw=8,sh=8,
 		kind=1
@@ -431,6 +433,9 @@ function make_plyr(x,y,z,angle)
 				end
 			end
 		end,
+		hit=function()
+			-- make_blast(x,y)
+		end,
 		update=function(self)
 			reload_ttl-=1
 			reload_nuke_ttl-=1
@@ -478,8 +483,7 @@ function update_parts(parts)
 	for i,p in pairs(parts) do
 		p.t+=1
 		-- elapsed?
-		-- todo: fix
-		if(p.ttl and p.t>=p.ttl) parts[i]=nil break
+		if(p.t>=p.ttl) parts[i]=nil goto continue
 
 		-- custom update?
 		if p.update then
@@ -498,15 +502,24 @@ function update_parts(parts)
 
 				local col,a,b,x0,y0,y1=collide(p,plyr)
 				if col and intersect_bitmasks(a,b,x0,y0,y1) then
-					local ax,ay=flr(a.sx),flr(a.sy)
-					p.rect={ax+x0,ay+y0,ax+a.sw-1,ay+y1-1}
-					--assert(false,"hit")
-					--parts[i]=nil
-					--goto die
+					--local ax,ay=flr(a.sx),flr(a.sy)
+					--p.rect={ax+x0,ay+y0,ax+a.sw-1,ay+y1-1}
+					plyr:hit()
+					
+					parts[i]=nil
+					goto die
 				end
-			else
-				-- todo:
+			elseif p.side==2 then
+				-- 
+				for _,npc in pairs(npcs) do
+					if npc:collide(p) then
+						npc:hit(1)
+						parts[i]=nil
+						break
+					end
+				end 
 			end
+
 
 			-- hit wall?
 			if solid(x0,y1) or solid(x1,y0) then
@@ -530,6 +543,7 @@ function update_parts(parts)
 			-- gravity
 			p.dz+=gravity
 		end
+::continue::
 	end
 end
 
@@ -565,8 +579,9 @@ function draw_parts(parts,x0,y0,z0,angle)
 	end
 end
 
+local _next_part=0
 function make_part(base_cls,x,y,z,dx,dy,dz)
-	return add(_parts,setmetatable({
+	local p=setmetatable({
 		-- age
 		t=0,
 		x=x,
@@ -575,12 +590,15 @@ function make_part(base_cls,x,y,z,dx,dy,dz)
 		dx=dx or 0,
 		dy=dy or 0,
 		dz=dz or 0
-	},
-	{__index=base_cls}))
+	},{__index=base_cls})
+	_parts[_next_part]=p
+	_next_part=(_next_part+1)%1024
+	return p
 end
 
+local _next_blt=0
 function make_bullet(base_cls,x,y,z,dx,dy,dz)
-	return add(_bullets,setmetatable({
+	local b=setmetatable({
 		-- age
 		t=0,
 		x=x,
@@ -589,8 +607,10 @@ function make_bullet(base_cls,x,y,z,dx,dy,dz)
 		dx=dx or 0,
 		dy=dy or 0,
 		dz=dz or 0
-	},
-	{__index=base_cls}))
+	},{__index=base_cls})
+	_bullets[_next_blt]=b
+	_next_blt=(_next_blt+1)%1024
+	return b
 end
 
 -- enemy bullets
@@ -598,13 +618,15 @@ local small_bullet_cls=with_hitmask({
 	ssx=16,ssy=40,
 	sw=8,sh=8,
 	kind=0,
-	side=1
+	side=1,
+	ttl=40
 })
 local large_bullet_cls=with_hitmask({
 	ssx=16,ssy=32,
 	sw=8,sh=8,
 	kind=0,
-	side=1
+	side=1,
+	ttl=180
 })
 
 -- blast
@@ -622,6 +644,7 @@ local blast_circles={
    }
 --local blast_spr=make_memspr(80,32,16,16,nil,14)
 local blast_cls={
+	ttl=10,
 	draw=function(self,x,y)
 		palt(0,false)
 		palt(14,true)
@@ -635,8 +658,8 @@ local blast_cls={
 		palt()
 	end,
 	update=function(self)
-		-- blast crater
-		if(self.t==5) add(blasts,{x=x,y=y})
+		-- todo: blast crater
+		-- if(self.t==5) add(blasts,{x=x,y=y})
 		return self
 	end
 }
@@ -650,14 +673,10 @@ function make_nuke(x,y)
 	local r0,r1,fp,t=8,8,#dither_pat,0
 	-- nuke always at floor level
 	return make_part({
-		update=function(self)
-			t+=1
-			-- todo: blast npc in range!
-			if(t>27) return
-			return self
-		end,
+		ttl=27,
 		draw=function(self,x,y,z)
 			--
+			local t=self.t
 			if t<4 then
 				fade(t)
 			else
@@ -736,9 +755,8 @@ function decompress(mem,fn)
 		end
 
 		for i=1,#word do
-			local s=word[i]
 			-- 0: empty tile
-			fn(s,x,y)
+			fn(word[i],x,y)
 			x+=1
 			if(x>127) x=0 y+=1 
 		end
@@ -748,8 +766,6 @@ end
 
 -->8
 -- npc functions
-local npcs={}
-
 function pop(a)
 	if #a>0 then
 		local p=a[#a]
@@ -847,7 +863,9 @@ function make_npc(base,x,y)
 		{x=0,y=0,ix=-h,iy=-w}
 	}
 	
-	return setmetatable({
+	return setmetatable(base,{
+		-- sub-classing
+		__index={
 		-- coords in world units
 		x=x,
 		y=y,
@@ -877,10 +895,13 @@ function make_npc(base,x,y)
 			end
 			-- visible?
 			if outcode==0 then
+				if(hit_t>0) memset(0x5f00,0x7,16) pal(0,0)
 				polytex(quad,base.uv)
+				pal()
 
-				print(angle,8*x1,8*y1,11)
+				-- print(angle,8*x1,8*y1,11)
 			end
+			--[[
 			if self.input then
 				local ca,sa=cos(angle),sin(angle)
 				local x0,y0=8*self.x,8*self.y
@@ -889,14 +910,15 @@ function make_npc(base,x,y)
 				x1,y1=x0+16*ca,y0+16*sa
 				line(x0,y0,x1,y1,8)
 			end
+			]]
 		end,
 		die=function(self)
-			make_blast(x,y)
+			make_blast(x+w,y+h)
 		end,
 		hit=function(self,dmg)
-			hp-=dmg
+			self.hp-=dmg
 			hit_t=4
-			if hp<=0 then
+			if self.hp<=0 then
 				-- 
 				self:die()
 				return
@@ -905,19 +927,26 @@ function make_npc(base,x,y)
 		update=function(self)
 			hit_t-=1
 			angle=self:control()
+		end,
+		collide=function(self,p)
+			if(not self.hitmask) return
 
-			-- todo: provide as parameters?
-			local px,py,pz,pangle=plyr:get_pos() 
-
-			--angle=atan2(x-px,-y+py)
-
-			-- todo: materialize coords: 8*
-			--self.x=x
-			--self.y=y
+			-- to npc base
+			local px,py=p.x-self.x,p.y-self.y
+			-- rotate
+			local ca,sa=cos(angle),-sin(angle)
+			px,py=ca*px+sa*py,-sa*px+ca*py
+			
+			local col,a,b,x0,y0,y1=collide(
+				{sx=-16,sy=-16,sw=32,sh=32,hitmask=self.hitmask},
+				{sx=8*px-4,sy=8*py-4,sw=8,sh=8,hitmask=p.hitmask})
+			if col and intersect_bitmasks(a,b,x0,y0,y1) then
+				--local ax,ay=flr(a.sx),flr(a.sy)
+				--p.rect={ax+x0,ay+y0,ax+a.sw-1,ay+y1-1}
+				hit_t=5
+			end
 		end
-	},
-	-- merge with base class
-	{__index=base})
+	}})
 end
 -- create actors
 local npc_id=0
@@ -999,9 +1028,11 @@ function make_tank(x,y)
 	return make_npc(light_tank_cls,x,y)
 end
 
+local heavy_turret_mask=with_hitmask(make_sprite(76,4,4))
+
 function make_heavy_turret(x,y)
 	local angle,reload_ttl=0,0
-	local heavy_turret_cls={
+	local turret={
 		sh=32,
 		sw=32,
 		uv={
@@ -1010,6 +1041,7 @@ function make_heavy_turret(x,y)
 			6,4,
 			2,4},
 		hp=10,
+		hitmask=heavy_turret_mask,
 		control=function(self)
 			local x,y=self.x,self.y
 			-- atan2 is fast enough
@@ -1034,9 +1066,8 @@ function make_heavy_turret(x,y)
 					do_async(function()
 						wait_async((i+1)*10)
 						-- still valid?
-						if self.hp>0 then
-							make_bullet(large_bullet_cls,cx-i*sa*w,cy+i*ca*w,1,0.12*ca,0.12*sa)				
-						end
+						if(self.hp<=0) return 
+						make_bullet(large_bullet_cls,cx-i*sa*w,cy+i*ca*w,1,0.12*ca,0.12*sa)				
 					end)
 				end
 			end
@@ -1044,9 +1075,57 @@ function make_heavy_turret(x,y)
 			return angle+0.25
 		end
 	}
-	return make_npc(heavy_turret_cls,x,y)
+	return make_npc(turret,x,y)
 end
-	
+
+function make_static_turret(x,y)
+	local reload_ttl=0,0
+	local turret={
+		sh=16,
+		sw=16,
+		hp=1,
+		draw=function()
+			-- built-in map
+		end,
+		collide=function(self,p)
+			-- to npc base
+			local x,y=self.x,self.y
+			local dx,dy=p.x-x,p.y-y
+			if dx*dx+dy*dy<2 then
+				-- todo: move to die override
+				do_async(function()
+					wait_async(4)
+					map_set(x,y,74)
+					map_set(x+1,y,75)
+					map_set(x,y+1,90)
+					map_set(x+1,y+1,91)
+				end)
+				return true
+			end
+		end,
+		control=function(self)
+			reload_ttl-=1
+			-- close enough?
+			if reload_ttl<0 and dist(x,y,plyr.x,plyr.y)<13 then
+				reload_ttl=30
+				do_async(function()
+					for i=1,4 do
+						wait_async(3)
+						-- still alive?
+						if(self.hp<=0) return						
+						for i=0,0.75,0.25 do
+							local ca,sa=cos(i),-sin(i)
+							make_bullet(small_bullet_cls,x+0.5*ca+1,y+0.5*sa+1,1,0.2*ca,0.2*sa)				
+						end
+					end
+				end)
+			end
+			return 0
+		end
+	}
+	return make_npc(turret,x,y)
+end
+
 -->8
 -- map helpers
 function polytex(v,uv)
@@ -1104,6 +1183,23 @@ function polytex(v,uv)
 	]]
 end
 
+function map_set(i,j,s)
+	if(s!=0) _map[i+128*j]=s
+	-- cell coord (128x128)->(4x4)
+	local ck=flr(i/32)+4*flr(j/32)
+	local cell_map=_cells_map[ck]
+	-- cell is 4*dword with a stride of 128/4 = 32
+	-- cell entry is packed as a dword
+	local k=4*(flr(band(i,31)/4)+32*band(j,31))
+	-- shift 
+	cell_map[k]=bor(cell_map[k] or 0,shl(0x0.0001,8*(i%4))*s)
+
+	-- invalidate cache
+	for _,entry in pairs(_map_lru) do
+		if(entry.k==ck) entry.k=-1 entry.t=-1
+	end
+end
+
 function draw_map(x,y,z,a)
 	local ca,sa=cos(a),-sin(a)
 	local scale=1/z
@@ -1126,12 +1222,13 @@ function draw_map(x,y,z,a)
 	-- collect visible cells
 	local viz={}
 	for k,cell in pairs(_cells) do
-		local out=band(
+		-- visible or partially visible?
+		if band(
 			band(cell[1].outcode,
 	   		band(cell[2].outcode,cell[3].outcode)),
-	   		cell[4].outcode)
-		-- visible or partially visible?
-		if(out==0) viz[k]=cell
+			   cell[4].outcode)==0 then
+			viz[k]=cell
+		end
 	end
 	
 	-- draw existing cache entries
@@ -1221,31 +1318,11 @@ function _init()
 	end
 
 	local mem=decompress(0x2000,function(s,i,j)
-		-- if(s==0) s=flr(24+rnd(3))
-		-- no need to record static tiles
-		if(s!=0) _map[i+128*j]=s
-
 		if fget(s,2) then
 			jumppads[i+128*j]=3
 		end
-
-		-- cell coord (128x128)->(4x4)
-		local ci,cj=flr(i/32),flr(j/32)
-		local ck=bor(ci,shl(cj,2))
-		local cell_map=_cells_map[ck]
-		assert(cell_map,ci.."/"..cj..":"..ck)
-		-- cell is 4*dword with a stride of 128/4 = 32
-		-- cell entry is packed as a dword
-		local k=4*(flr(band(i,31)/4)+shl(band(j,31),5))
-		local m=cell_map[k] or 0
-		-- shift 
-		m=bor(m,shl(0x0.0001,8*band(i,3))*s)
-		cell_map[k]=m
-		-- dword-packed map
-		_cells_map[ck]=cell_map
-
-		--rectfill(ci*16,cj*16,(ci+1)*16-1,(cj+1)*16-1,1)
-		--print(ck.."\n"..c,ci*16+1,cj*16+1,2)
+		-- update map
+		map_set(i,j,s)
 	end)
 	-- decompress actors
 	-- avoid overwriting ram while reading..
@@ -1260,6 +1337,10 @@ function _init()
 	add(npcs,make_tank(33,60))
 	add(npcs,make_heavy_turret(23,35))
 	add(npcs,make_heavy_turret(30,35))
+	add(npcs,make_static_turret(23,42))
+	add(npcs,make_static_turret(28,42))
+	add(npcs,make_static_turret(23,48))
+	add(npcs,make_static_turret(28,48))
 end
 
 function _update()
