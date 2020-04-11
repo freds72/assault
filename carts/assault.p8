@@ -27,6 +27,22 @@ function lerpa(a,t)
 	return a[flr(#a*t)+1]
 end
 
+-- return 
+function make_lerp_angle(angle,pow)
+	return function(x0,y0,x1,y1)
+		local target_angle=atan2(x1-x0,-y1+y0)
+		-- shortest angle
+		local dtheta=target_angle-angle
+		if dtheta>0.5 then
+			angle+=1
+		elseif dtheta<-0.5 then
+			angle-=1
+		end
+		angle=lerp(angle,target_angle,pow)
+		return angle
+	end
+end
+
 function normalize(u,v,scale)
 	scale=scale or 1
 	local d=sqrt(u*u+v*v)
@@ -859,15 +875,18 @@ function make_npc(base,x,y)
 	-- texspace -> world space
 	-- note: useless for 'map' npc
 	local s=base.sprite or base
-	local w,h=0.5*s.sw/8,0.5*s.sh/8
+	local w,h=s.sw/16,s.sh/16
+	-- x---->x
+	--    0  |
+	-- x<----x
 	local quad={
-			{x=0,y=0,ix=-h,iy=w},
-			{x=0,y=0,ix=h,iy=w},
-			{x=0,y=0,ix=h,iy=-w},
-			{x=0,y=0,ix=-h,iy=-w}
-		}
+		{x=0,y=0,ix=-w,iy=-h},
+		{x=0,y=0,ix=w,iy=-h},
+		{x=0,y=0,ix=w,iy=h},
+		{x=0,y=0,ix=-w,iy=h}
+	}
 
-	return setmetatable(base,{
+	return add(npcs,setmetatable(base,{
 		-- sub-classing
 		__index={
 		-- coords in world units
@@ -917,11 +936,12 @@ function make_npc(base,x,y)
 			]]
 		end,
 		die=function(self)
-			make_blast(x+w,y+h)
+			make_blast(self.x,self.y)
+			self.dead=true
 		end,
 		hit=function(self,dmg)
 			self.hp-=dmg
-			hit_t=4
+			hit_t=2
 			if self.hp<=0 then
 				-- 
 				self:die()
@@ -956,19 +976,19 @@ function make_npc(base,x,y)
 				-- assert(false)
 				--local ax,ay=flr(a.sx),flr(a.sy)
 				--p.rect={ax+x0,ay+y0,ax+a.sw-1,ay+y1-1}
-				hit_t=5
 				return true
 			end
 		end
-	}})
+	}}))
 end
 -- create actors
 local npc_id=0
 local light_tank_sprite=with_hitmask(make_sprite(64,16,16))
 
 function make_tank(x,y)
-	local angle,acc,move_t=0,0.1,0
+	local acc,move_t=0.1,0
 	local update_path=cocreate(update_path_async)
+	local lerp_angle=make_lerp_angle(0,0.1)
 	local dx,dy=0,0
 	-- can npc move?
 	local id=npc_id
@@ -989,6 +1009,7 @@ function make_tank(x,y)
 		path={},
 		control=function(self)
 			move_t-=1
+			local angle=0
 			if move_t<0 and #self.path>0 then
 				-- get result from a*
 				local input=self.input
@@ -997,16 +1018,8 @@ function make_tank(x,y)
 					self.input=input
 				end
 				if input then
-					local target_angle=atan2(input.x-self.x,input.y-self.y)
-					-- shortest angle
-					local dtheta=target_angle-angle
-					if dtheta>0.5 then
-						angle+=1
-					elseif dtheta<-0.5 then
-						angle-=1
-					end
-					angle=lerp(angle,target_angle,0.1)
-					
+					angle=lerp_angle(input.x,input.y,self.x,self.y)
+
 					local ca,sa=cos(angle),sin(angle)
 					dx=0.1*ca
 					dy=0.1*sa
@@ -1058,15 +1071,15 @@ function make_heavy_tank(x,y)
 		sprite=heavy_tank_sprite,
 		uv={
 			0,3,
-			0,5,
+			4,3,
 			4,5,
-			4,3},
-		hp=1,
+			0,5},
+		hp=10,
 		-- co-routine data
 		seek_dly=60,
 		path={},
 		control=function(self)
-			return 0
+			return 0.1
 		end
 	}
 
@@ -1075,7 +1088,7 @@ end
 
 local msl_tank_sprite=with_hitmask(make_sprite(178,32,16))
 function make_msl_tank(x,y)
-	local angle,acc,move_t=0,0.1,0
+	local angle,acc,move_t,reload_ttl=0,0.1,0,0
 	local update_path=cocreate(update_path_async)
 	local dx,dy=0,0
 	-- can npc move?
@@ -1088,14 +1101,24 @@ function make_msl_tank(x,y)
 		sprite=msl_tank_sprite,
 		uv={
 			4,3,
-			4,5,
+			8,3,
 			8,5,
-			8,3},
-		hp=1,
+			4,5},
+		hp=8,
 		-- co-routine data
 		seek_dly=60,
 		path={},
 		control=function(self)
+			reload_ttl-=1
+			if reload_ttl<0 then
+				reload_ttl=30
+				do_async(function()
+					for i=1,4 do
+						wait_async(5)
+						make_homing_msl(self.x,self.y,0)
+					end
+				end)
+			end
 			return 0
 		end
 	}
@@ -1105,28 +1128,19 @@ end
 
 local heavy_turret_sprite=with_hitmask(make_sprite(76,32,24))
 function make_heavy_turret(x,y)
-	local angle,reload_ttl=0,0
+	local reload_ttl,toward=0,make_lerp_angle(0,0.1)
 	local turret={
 		uv={
 			2,0,
-			2,3,
+			6,0,
 			6,3,
-			6,0},
+			2,3},
 		hp=10,
 		sprite=heavy_turret_sprite,
 		control=function(self)
 			-- account for turret size
-			local x,y=self.x+2,self.y+2
-			-- atan2 is fast enough
-			local target_angle=atan2(plyr.x-x,-plyr.y+y)
-			-- shortest angle
-			local dtheta=target_angle-angle
-			if dtheta>0.5 then
-				angle+=1
-			elseif dtheta<-0.5 then
-				angle-=1
-			end
-			angle=lerp(angle,target_angle,0.1)
+			local x,y=self.x,self.y
+			local angle=toward(x,y,plyr.x,plyr.y)
 
 			-- close enough?
 			reload_ttl-=1
@@ -1144,7 +1158,7 @@ function make_heavy_turret(x,y)
 					end)
 				end
 			end
-			return angle+0.25
+			return angle
 		end
 	}
 	return make_npc(turret,x,y)
@@ -1221,7 +1235,7 @@ function make_msl_silo(x,y)
 						wait_async(5)
 					end
 					-- fire msl
-					add(npcs,make_msl(self.x+0.5,self.y+0.5))
+					make_msl(self.x+0.5,self.y+0.5)
 					-- debug
 					hidden=true
 				end)
@@ -1251,11 +1265,51 @@ function make_msl(x,y)
 				7+du,0,
 				7+du,1,
 				6+du,1}
-			--if(ttl<0) self:die() return
 			self.x+=dx
 			self.y+=dy
-			self.z=max(self.z+dz)
+			self.z+=dz
+			if(ttl<0 or self.z<0) self:die() return
 			dz+=gravity
+			return angle 
+		end
+	}
+	return make_npc(msl,x,y)
+end
+
+function make_homing_msl(x,y,angle)
+	-- get direction
+	local ttl,angle_ttl,acc,toward=40,20,0.4,make_lerp_angle(angle,0.05)
+	local msl={
+		w=0.4,
+		h=0.4,
+		sw=8,
+		sh=8,
+		uv={
+			6,0,
+			7,0,
+			7,1,
+			6,1},
+		collide=function() end,
+		control=function(self) 
+			ttl-=1
+			if(ttl<0) self:die() return
+			
+			angle_ttl-=1
+			-- homing mode?
+			if angle_ttl<0 then 
+				angle=toward(self.x+0.5,self.y+0.5,plyr.x,plyr.y)
+			end
+
+			local dx,dy=(0.2+acc)*cos(angle),-(0.2+acc)*sin(angle)
+			acc*=0.87
+			local xarea,yarea=get_area(self,dx,0),get_area(self,0,dy)
+			-- solid?
+			if bor(band(xarea,0x1),band(yarea,0x1))!=0 then
+				self:die()
+			else
+				self.x+=dx
+				self.y+=dy
+			end
 			return angle 
 		end
 	}
@@ -1473,20 +1527,17 @@ function _init()
 		mset(t.i,t.j,t.s)
 	end
 	
-	add(npcs,make_tank(33,60))
+	--add(npcs,make_tank(33,60))
 	
-	add(npcs,make_heavy_tank(33,57))
-	
-	add(npcs,make_msl_tank(33,52))
-	
-	add(npcs,make_heavy_turret(23,35))
-	add(npcs,make_heavy_turret(30,35))
-	add(npcs,make_static_turret(23,42))
-	add(npcs,make_static_turret(28,42))
-	add(npcs,make_static_turret(23,48))
-	add(npcs,make_static_turret(28,48))
-	add(npcs,make_msl_silo(28,58))
-
+	make_heavy_tank(33,57)
+	make_msl_tank(33,52)
+	make_heavy_turret(23,35)
+	make_heavy_turret(30,35)
+	make_static_turret(23,42)
+	make_static_turret(28,42)
+	make_static_turret(23,48)
+	make_static_turret(28,48)
+	make_msl_silo(28,58)
 
 end
 
@@ -1504,8 +1555,12 @@ function _update()
 	cam_update()
 
 	plyr:update()
-	for i=1,#npcs do
-		npcs[i]:update()
+
+	-- update actors
+	for i=#npcs,1,-1 do
+		local npc=npcs[i]
+		npc:update()
+		if(npc.dead) del(npcs,npc)
 	end
 
 	update_parts(_bullets)
