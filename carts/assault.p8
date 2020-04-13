@@ -1658,12 +1658,26 @@ function _draw()
 	-- swamp green
 	pal(11,138,1)
 
-	prints("score",18,2,14,1)
+	printb("SCORE",19,1,1)
+	printb("SCORE",18,0,14)
 
-	local s=tostr(flr(time()))
-	prints(s,40-#s+1,9,7,0)
+	local s=tostr(flr(time()*256))
+	printb(s,18,7,0)
+	printb(s,18,6,7)
 	
-	prints("topscore",78,2,14,1)
+	printb("HI",101,1,1)
+	printb("HI",100,0,14)
+
+	printb("99999",83,7,0)
+	printb("99999",82,6,7)
+
+
+	printb("TIME",55,1,1)
+	printb("TIME",54,0,14)
+
+	local t=tostr(99-flr(time()))
+	printb(t,61,7,0)
+	printb(t,60,6,7)
 
 	for i=0,2 do
 		spr(166,18+i*6,120)
@@ -1677,6 +1691,56 @@ function prints(s,x,y,c,sc)
 	print(s,x,y,c)
 end
 
+-->8
+local bold_holes={
+	A={2,2,2,4},
+	B={2,2},
+	D={2,2,2,3},
+	G={2,2,2,3},
+	H={2,1,2,4},
+	K={2,1,2,4},
+	M={2,1,1,4,3,4},
+	N={2,4},
+	O={2,2,2,3},
+	P={2,2},
+	Q={2,2},
+	R={2,2,2,4},
+	U={2,1},
+	V={2,1},
+	W={1,1,3,1},
+	X={2,1,2,4},
+	Y={2,1},
+	["0"]={2,1,2,2,2,3},
+	["4"]={2,0},
+	["6"]={2,3},
+	["8"]={2,1,2,3},
+	["9"]={2,1}
+}
+function printb(s,x,y,c)
+	for k=1,#s do
+		local t,bck=sub(s,k,k),{}
+		local holes=bold_holes[t]
+		if holes then
+			for i=1,#holes,2 do
+				local sx,sy=x+holes[i]-1,y+holes[i+1]
+				local pix=pget(sx,sy)
+				-- backup background
+				bck[i]=function() pset(sx,sy,pix) end
+			end
+		end
+
+		-- bold print
+		for i=-1,1 do
+			print(t,x+i,y,c)
+		end
+
+		-- recover char kerning
+		for _,b in pairs(bck) do
+			b()
+		end
+		x+=6
+	end
+end
 __gfx__
 0000000033333333000000055ddddd5511000000dddddddddddddddddddddddd000000000000000000000000000000001111499a4112442442442114a9941111
 0000000035333333000001ddd66666dd55115100dd77d77d77d77d77d77d77dd000000000000000000000000000000001777499a4771221221221774a9947771
