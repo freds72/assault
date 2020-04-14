@@ -1,6 +1,11 @@
 pico-8 cartridge // http://www.pico-8.com
 version 19
 __lua__
+
+#include includes/tquad.lua
+#include includes/bold.lua
+
+-- helper functions
 function lerp(a,b,t)
  return a*(1-t)+b*t
 end
@@ -20,199 +25,105 @@ function cam_update()
 	end
 	camera(shkx,shky)
 end
+
+function padding(s)
+	return sub("00000",1,5-#s)..s
+end
+
 local dither_pat={0b1111111111111111,0b0111111111111111,0b0111111111011111,0b0101111111011111,0b0101111101011111,0b0101101101011111,0b0101101101011110,0b0101101001011110,0b0101101001011010,0b0001101001011010,0b0001101001001010,0b0000101001001010,0b0000101000001010,0b0000001000001010,0b0000001000001000,0b0000000000000000}
 
-local n=11
+-->8
+-- globals
+local title_z,landed=-7
+local hi_score,coins=0,1
+
+-->8
+-- update/draw
+function _init()
+	cartdata("freds72_assault")
+	-- make sure player get at least 1 coin!
+	coins=max(dget(0),1)
+	hi_score=dget(1)
+end
 
 function _update()
 	if(btnp(4) or btnp(5)) load("assault.p8")
+
 	cam_update()
 
+	title_z=min(title_z+0.15)
+	if(title_z==0 and not landed) landed=true cam_shake()
 end
 
-local z=-7
-local angle=0.3
-local landed
 function _draw()
- cls(0)
- clip(16,0,128-32,128)
-
- z=min(z+0.15)
- if(z==0 and not landed) landed=true cam_shake()
-
- local bands={1,1,2,13}
- local k,dk=0,(#bands-1)/64
+	cls()
+	clip(16,0,128-32,128)
+	local bands={1,1,2,13}
+	local k,dk=0,(#bands-1)/64
 	for i=0,63 do
 		local c0,c1=bands[flr(k)+1],bands[flr(k)+2]
-  local c=bor(shl(c0,4),c1)
-	 local t=k%1
-	 fillp(lerpa(dither_pat,t))
-	 rectfill(0,i,127,i,c)
-	 k+=dk
+		local c=bor(shl(c0,4),c1)
+		local t=k%1
+		fillp(lerpa(dither_pat,t))
+		rectfill(0,i,127,i,c)
+		k+=dk
 	end
 
- --if(btnp(0)) n+=1
- --if(btnp(1)) n-=1
- bands={6,13,5,0}
- k,dk=0,(#bands-1)/n
+	--if(btnp(0)) n+=1
+	--if(btnp(1)) n-=1
+	bands={6,13,5,0}
+	local n=11
+	k,dk=0,(#bands-1)/n
 	for i=64,64+n-1 do
 		local c0,c1=bands[flr(k)+1],bands[flr(k)+2]
-  local c=bor(shl(c0,4),c1)
-	 local t=k%1
-	 fillp(lerpa(dither_pat,t))
-	 rectfill(0,i,127,i,c)
-	 k+=dk
+		local c=bor(shl(c0,4),c1)
+		local t=k%1
+		fillp(lerpa(dither_pat,t))
+		rectfill(0,i,127,i,c)
+		k+=dk
 	end
 
- pal(14,0)
- --spr(0,16,25,16,8)
- local quad={
-	{x=-48,y=38},
-	{x=48,y=38},
-	{x=48,y=0},
-	{x=-48,y=0}
-}
-
-	 angle=z/14-0.25
- local w=8/(z+8)
- local ca,sa=cos(angle),-sin(angle)
- for _,p in pairs(quad) do
-	local x,y=-sa*p.x+ca*p.y,ca*p.x+sa*p.y
-  p.x=16+48+x*w	
-  p.y=64-(1-y)*w	
- end
+	-- 3d/rotation effect
+	local angle=title_z/14-0.25
+	local w=8/(title_z+8)
+	local ca,sa=cos(angle),-sin(angle)
+	-- title vertices
+	local vertices={
+		{x=-48,y=38},
+		{x=48,y=38},
+		{x=48,y=0},
+		{x=-48,y=0}
+	}	
+	for _,v in pairs(vertices) do
+		local x,y=-sa*v.x+ca*v.y,ca*v.x+sa*v.y
+		v.x=16+48+x*w	
+		v.y=64-(1-y)*w	
+	end
  
- --[[
- angle=min(angle-0.01)
- local ca,sa=cos(angle),-sin(angle)
- for _,p in pairs(quad) do
-		p.x,p.y=16-sa*p.x+ca*p.y,64+(ca*p.x+sa*p.y)
- end
- ]]
- tquad(quad,{0,0,12,0,12,5,0,5})
- pal()
+	pal(14,0) 
+	tquad(vertices,{0,0,12,0,12,5,0,5})
+ 	pal()
  
- if landed then
-	if(flr(8*time())%8<4) printb("INSERT COINS",30,80,14) printb("🅾️❎",56,87,2)
+ 	if landed then
+		if(flr(8*time())%8<4) printb("INSERT COINS",30,80,14) printb("🅾️❎",56,87,2)
 
-	printb("SCORE",19,1,1)
-	printb("SCORE",18,0,14)
+		printb("SCORE",19,1,1)
+		printb("SCORE",18,0,14)
 
-	printb("00000",18,7,0)
-	printb("00000",18,6,7)
-	
-	printb("HI",101,1,1)
-	printb("HI",100,0,14)
+		printb("00000",18,7,0)
+		printb("00000",18,6,7)
+		
+		printb("HI",101,1,1)
+		printb("HI",100,0,14)
 
-	printb("99999",83,7,0)
-	printb("99999",82,6,7)
-
- end
- printb("FREDS72",46,120,8)
-end
--->8
-local bold_holes={
-	A={2,2,2,4},
-	B={2,2},
-	D={2,2,2,3},
-	G={2,2,2,3},
-	H={2,1,2,4},
-	K={2,1,2,4},
-	M={2,1,1,4,3,4},
-	N={2,4},
-	O={2,2,2,3},
-	P={2,2},
-	Q={2,2},
-	R={2,2,2,4},
-	U={2,1},
-	V={2,1},
-	W={1,1,3,1},
-	X={2,1,2,4},
-	Y={2,1},
-	["0"]={2,1,2,2,2,3},
-	["4"]={2,0},
-	["6"]={2,3},
-	["8"]={2,1,2,3},
-	["9"]={2,1},
-	["🅾️"]={glyph=true},
-	["❎"]={glyph=true}
-}
-function printb(s,x,y,c)
-	for k=1,#s do
-		local t,bck,w=sub(s,k,k),{},6
-		local holes,is_glyph=bold_holes[t]
-		if holes then
-			if(holes.glyph) w=7 is_glyph=true
-			for i=1,#holes,2 do
-				local sx,sy=x+holes[i]-1,y+holes[i+1]
-				local pix=pget(sx,sy)
-				-- backup background
-				bck[i]=function() pset(sx,sy,pix) end
-			end
-		end
-
-		-- bold print
-		if is_glyph then
-			print(t,x,y,c)
-		else
-			for i=-1,1 do
-				print(t,x+i,y,c)
-			end
-		end
-
-		-- recover char kerning
-		for _,b in pairs(bck) do
-			b()
-		end
-		x+=w
+		local hi=padding(tostr(hi_score))
+		printb(hi,83,7,0)
+		printb(hi,82,6,7)
 	end
+ 
+	printb("FREDS72",46,120,8)
 end
--->8
-function tquad(v,uv)
-	local p0,nodes=v[4],{}
-	local x0,y0,u0,v0=p0.x,p0.y,uv[7],uv[8]
-	for i=1,4 do
-		local p1=v[i]
-		local x1,y1,u1,v1=p1.x,p1.y,uv[i*2-1],uv[i*2]
-		local _x1,_y1,_u1,_v1=x1,y1,u1,v1
-		if(y0>y1) x0,y0,x1,y1,u0,v0,u1,v1=x1,y1,x0,y0,u1,v1,u0,v0
-		local dy=y1-y0
-		local dx,du,dv=(x1-x0)/dy,(u1-u0)/dy,(v1-v0)/dy
-		if(y0<0) x0-=y0*dx u0-=y0*du v0-=y0*dv y0=0
-		local cy0=ceil(y0)
-		-- sub-pix shift
-		local sy=cy0-y0
-		x0+=sy*dx
-		u0+=sy*du
-		v0+=sy*dv
-		for y=cy0,min(ceil(y1)-1,127) do
-			local x=nodes[y]
-			if x then
-				--rectfill(x[1],y,x0,y,offset/16)
-				
-				local a,au,av,b,bu,bv=x.x,x.u,x.v,x0,u0,v0
-				if(a>b) a,au,av,b,bu,bv=b,bu,bv,a,au,av
-				local ca,cb=ceil(a),ceil(b)-1
-				--assert(ca<=ceil(b)-1,a.."/"..b)
-				if ca<=cb then
-					local dab=b-a
-					local dau,dav=(bu-au)/dab,(bv-av)/dab
-					-- sub-pix shift
-					local sa=ca-a
-					au+=sa*dau
-					av+=sa*dav
-					tline(ca,y,cb,y,au,av,dau,dav)
-				end
-			else
-				nodes[y]={x=x0,u=u0,v=v0}
-			end
-			x0+=dx
-			u0+=du
-			v0+=dv
-		end
-		x0,y0,u0,v0=_x1,_y1,_u1,_v1
-	end
-end
+
 __gfx__
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000

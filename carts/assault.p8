@@ -4,10 +4,12 @@ __lua__
 -- assault
 -- by @freds72
 
+#include includes/bold.lua
+
 -- misc helper functions
 local shkx,shky=0,0
 function cam_shake()
-	shkx,shkx=min(1,shkx+rnd()),min(1,shky+rnd())
+	shkx,shky=min(1,shkx+rnd()),min(1,shky+rnd())
 end
 function cam_update()
 	shkx*=-0.7-rnd(0.2)
@@ -42,13 +44,6 @@ function make_lerp_angle(angle,pow)
 		angle=lerp(angle,target_angle,pow)
 		return angle
 	end
-end
-
-function normalize(u,v,scale)
-	scale=scale or 1
-	local d=sqrt(u*u+v*v)
-	if (d>0) u/=d v/=d
-	return u*scale,v*scale
 end
 
 -- manhattan distance (safe for overflow)
@@ -121,8 +116,7 @@ function with_hitmask(sprite,tc)
 	for j=0,sh-1 do
 		local bits=0
 		for i=0,sw-1 do
-			local c=sget(sx+i,sy+j)
-			if(c!=tc) bits=bor(bits,lshr(0x8000,i))  
+			if(sget(sx+i,sy+j)!=tc) bits=bor(bits,lshr(0x8000,i))  
 		end
 		bitmask[j]=bits
 	end
@@ -146,17 +140,17 @@ function collide(a,b)
 	-- a is left most
 	if(a.sx>b.sx) a,b=b,a
 	local ax,ay,bx,by=flr(a.sx),flr(a.sy),flr(b.sx),flr(b.sy)
+	local ah,bh=ay+a.sh,by+b.sh
 	if ax<bx+b.sw and 
 		ax+a.sw>bx and
-		ay<by+b.sh and
-		ay+a.sw>by then
+		ay<bh and
+		ah>by then
 	 	-- collision coords in 'a' space
- 		return true,a,b,bx-ax,max(by-ay),min(by+b.sh,ay+a.sh)-ay
+ 		return true,a,b,bx-ax,max(by-ay),min(bh,ah)-ay
 	end
 end
 
 -->8
-
 -- game globals
 local time_t=0
 local jumppads={}
@@ -168,10 +162,10 @@ local gravity=-0.04
 
 -- player factory
 function make_plyr(x,y,z,angle)
-	local reload_ttl,reload_nuke_ttl,acc,da,dz,mortar_angle,driving,underwater=0,0,0,0,0,0
+	local reload_ttl,reload_nuke_ttl,acc,da,dz,mortar_angle,underwater=0,0,0,0,0,0
 	-- threads positions & velocities
 	local lthread,rthread,lthread_acc,rthread_acc=0,0,0,0
-	local states,state,nuke_mode
+	local states,state,nuke_mode,driving_mode
 	local default_sprite=with_hitmask(make_sprite(96,16,16))
 	local flip_sprites,mortar_sprites={
 		[-1]={
@@ -248,7 +242,7 @@ function make_plyr(x,y,z,angle)
 	states={
 		drive=function()
 			local ttl=0
-			sprite,z,dz,driving,nuke_mode=default_sprite,0,0,true
+			sprite,z,dz,driving_mode,nuke_mode=default_sprite,0,0,true
 			-- if(not trails) make_part({sw=2.5,dsw=-0.1,ttl=6000,c=6,kind=6,trail={}},58,120) make_part({sw=2.5,dsw=-0.1,ttl=6000,c=6,kind=6,trail={}},68,120)
 		
 			return function(self)
@@ -321,7 +315,7 @@ function make_plyr(x,y,z,angle)
 			local ca,sa=cos(angle),sin(angle)
 			local dx,dy=0.1*ca*dir,-0.1*sa*dir
 			-- stop fwd & rotation
-			acc,da,driving=0,0
+			acc,da,driving_mode=0,0
 			return function(self)
 				ttl-=1
 				if(ttl<0) state=states.drive() return
@@ -343,7 +337,7 @@ function make_plyr(x,y,z,angle)
 		end,
 		airborne=function()
 			local ttl=0
-			mortar_angle,nuke_mode,driving=0,true
+			mortar_angle,nuke_mode,driving_mode=0,true
 			return function()
 				if(btn(0)) da=-0.01
 				if(btn(1)) da=0.01
@@ -366,7 +360,7 @@ function make_plyr(x,y,z,angle)
 		mortar=function()
 			nuke_mode=true
 			-- stop fwd & rotation
-			acc,da,mortar_angle,driving=0,0,0.02
+			acc,da,mortar_angle,driving_mode=0,0,0.02
 			return function()
 				if(mortar_angle<0.02) state=states.drive() return
 
@@ -379,7 +373,7 @@ function make_plyr(x,y,z,angle)
 		end,
 		drop=function()
 			local bounces=2
-			driving=nil
+			driving_mode=nil
 			return function()
 				z+=dz
 				dz+=gravity
@@ -414,7 +408,7 @@ function make_plyr(x,y,z,angle)
 			return x,y,z,angle
 		end,
 		draw=function(self)
-			if driving then
+			if driving_mode then
 				if(underwater) pal(5,6)
 				if lthread_acc>0 then
 					spr(dust_sprites[flr(time_t/4)%3+1],64,119,1,1,false,true)
@@ -432,7 +426,7 @@ function make_plyr(x,y,z,angle)
 			if(underwater) pal(1,3) pal(9,11) pal(4,11)
 			spr(sprite.spr,self.sx,self.sy,2,2)
 			
-			if driving then
+			if driving_mode then
 				sspr(40+2*flr((lthread%3+3)%3),32,2,7,58,111)
 				sspr(40+2*flr((rthread%3+3)%3),32,2,7,64,111,2,7,true)
 				lthread+=lthread_acc
@@ -482,25 +476,6 @@ function make_plyr(x,y,z,angle)
 			if(abs(da)<0.001) da=0
 		end
 	}
-end
-
--- check for the given tile flag
-function fmget(x,y)
-	return fget(_map[flr(x)+128*flr(y)])
-end
--- return true if solid tile
-function solid(x,y)
-	return fget(_map[flr(x)+128*flr(y)],0)
-end
-
-function get_area(a,dx,dy)
-	local x,y,w,h=a.x+dx,a.y+dy,a.w,a.h
-	return 
-		bor(
-			bor(fmget(x-w,y-h),
-			fmget(x+w,y-h)),
-			bor(fmget(x-w,y+h),
-			fmget(x+w,y+h)))
 end
 
 -- particles: do not interact with actors or background
@@ -592,10 +567,10 @@ function draw_parts(parts,x0,y0,z0,angle)
 	local ca,sa=cos(angle),sin(angle)
 	for _,p in pairs(parts) do
 		-- actual "depth"
-		local z=(p.z+8)/(z0+8)
+		local z,zw=8/(z0+8),(p.z+0.5)/(z0+0.5)
 		-- todo: front of cam?
 		if true then --z>0.1 then
-			local x,y,w,h=(p.x-x0)*z,(p.y-y0)*z,p.sw and max(p.sw*z) or 0,p.sh and max(p.sh*z) or 0
+			local x,y,w,h=(p.x-x0)*z,(p.y-y0)*z,p.sw and max(p.sw*zw) or 0,p.sh and max(p.sh*zw) or 0
 			-- project
 			local dx,dy=64+shl(ca*x-sa*y,3),112+shl(sa*x+ca*y,3)
 			if p.draw then
@@ -1351,63 +1326,26 @@ function make_homing_msl(x,y,angle)
 end
 
 -->8
--- map helpers
--- quad rasterization with tline uv coordinates
-function tquad(v,uv)
-	local p0,nodes=v[4],{}
-	local x0,y0,u0,v0=p0.x,p0.y,uv[7],uv[8]
-	for i=1,4 do
-		local p1=v[i]
-		local x1,y1,u1,v1=p1.x,p1.y,uv[i*2-1],uv[i*2]
-		local _x1,_y1,_u1,_v1=x1,y1,u1,v1
-		if(y0>y1) x0,y0,x1,y1,u0,v0,u1,v1=x1,y1,x0,y0,u1,v1,u0,v0
-		local dy=y1-y0
-		local dx,du,dv=(x1-x0)/dy,(u1-u0)/dy,(v1-v0)/dy
-		if(y0<0) x0-=y0*dx u0-=y0*du v0-=y0*dv y0=0
-		local cy0=ceil(y0)
-		-- sub-pix shift
-		local sy=cy0-y0
-		x0+=sy*dx
-		u0+=sy*du
-		v0+=sy*dv
-		for y=cy0,min(ceil(y1)-1,127) do
-			local x=nodes[y]
-			if x then
-				--rectfill(x[1],y,x0,y,offset/16)
-				
-				local a,au,av,b,bu,bv=x.x,x.u,x.v,x0,u0,v0
-				if(a>b) a,au,av,b,bu,bv=b,bu,bv,a,au,av
-				local ca,cb=ceil(a),ceil(b)-1
-				--assert(ca<=ceil(b)-1,a.."/"..b)
-				if ca<=cb then
-					local dab=b-a
-					local dau,dav=(bu-au)/dab,(bv-av)/dab
-					-- sub-pix shift
-					local sa=ca-a
-					au+=sa*dau
-					av+=sa*dav
-					tline(ca,y,cb,y,au,av,dau,dav)
-				end
-			else
-				nodes[y]={x=x0,u=u0,v=v0}
-			end
-			x0+=dx
-			u0+=du
-			v0+=dv
-		end
-		x0,y0,u0,v0=_x1,_y1,_u1,_v1
-	end
-	--[[
-	local v0,v1,v2,v3=
-		v[1],
-		v[2],
-		v[3],
-		v[4]
-	line(v0.x,v0.y,v1.x,v1.y,7)
-	line(v1.x,v1.y,v2.x,v2.y,7)
-	line(v2.x,v2.y,v3.x,v3.y,7)
-	line(v3.x,v3.y,v0.x,v0.y,7)
-	]]
+-- map & draw helpers
+#include includes/tquad.lua
+
+-- check for the given tile flag
+function fmget(x,y)
+	return fget(_map[flr(x)+128*flr(y)])
+end
+-- return true if solid tile
+function solid(x,y)
+	return fget(_map[flr(x)+128*flr(y)],0)
+end
+
+function get_area(a,dx,dy)
+	local x,y,w,h=a.x+dx,a.y+dy,a.w,a.h
+	return 
+		bor(
+			bor(fmget(x-w,y-h),
+			fmget(x+w,y-h)),
+			bor(fmget(x-w,y+h),
+			fmget(x+w,y+h)))
 end
 
 function map_set(i,j,s)
@@ -1685,56 +1623,6 @@ function _draw()
 	--print(stat(1).."/"..stat(7).."/"..stat(9).." "..stat(0).."kb",18,2,7)
 end
 
--->8
-local bold_holes={
-	A={2,2,2,4},
-	B={2,2},
-	D={2,2,2,3},
-	G={2,2,2,3},
-	H={2,1,2,4},
-	K={2,1,2,4},
-	M={2,1,1,4,3,4},
-	N={2,4},
-	O={2,2,2,3},
-	P={2,2},
-	Q={2,2},
-	R={2,2,2,4},
-	U={2,1},
-	V={2,1},
-	W={1,1,3,1},
-	X={2,1,2,4},
-	Y={2,1},
-	["0"]={2,1,2,2,2,3},
-	["4"]={2,0},
-	["6"]={2,3},
-	["8"]={2,1,2,3},
-	["9"]={2,1}
-}
-function printb(s,x,y,c)
-	for k=1,#s do
-		local t,bck=sub(s,k,k),{}
-		local holes=bold_holes[t]
-		if holes then
-			for i=1,#holes,2 do
-				local sx,sy=x+holes[i]-1,y+holes[i+1]
-				local pix=pget(sx,sy)
-				-- backup background
-				bck[i]=function() pset(sx,sy,pix) end
-			end
-		end
-
-		-- bold print
-		for i=-1,1 do
-			print(t,x+i,y,c)
-		end
-
-		-- recover char kerning
-		for _,b in pairs(bck) do
-			b()
-		end
-		x+=6
-	end
-end
 __gfx__
 0000000033333333000000055ddddd5511000000dddddddddddddddddddddddd000000000000000000000000000000001111499a4112442442442114a9941111
 0000000035333333000001ddd66666dd55115100dd77d77d77d77d77d77d77dd000000000000000000000000000000001777499a4771221221221774a9947771
