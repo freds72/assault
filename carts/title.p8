@@ -4,6 +4,7 @@ __lua__
 
 #include includes/tquad.lua
 #include includes/bold.lua
+#include includes/bigscore.lua
 
 -- helper functions
 function lerp(a,b,t)
@@ -26,8 +27,9 @@ function cam_update()
 	camera(shkx,shky)
 end
 
-function padding(s)
-	return sub("00000",1,5-#s)..s
+function padding(s,n)
+	n=n or 5
+	return sub("00000",1,n-#s)..s
 end
 
 local dither_pat={0b1111111111111111,0b0111111111111111,0b0111111111011111,0b0101111111011111,0b0101111101011111,0b0101101101011111,0b0101101101011110,0b0101101001011110,0b0101101001011010,0b0001101001011010,0b0001101001001010,0b0000101001001010,0b0000101000001010,0b0000001000001010,0b0000001000001000,0b0000000000000000}
@@ -89,15 +91,15 @@ function _draw()
 	local ca,sa=cos(angle),-sin(angle)
 	-- title vertices
 	local vertices={
-		{x=-48,y=38},
-		{x=48,y=38},
+		{x=-48,y=40},
+		{x=48,y=40},
 		{x=48,y=0},
 		{x=-48,y=0}
 	}	
 	for _,v in pairs(vertices) do
 		local x,y=-sa*v.x+ca*v.y,ca*v.x+sa*v.y
 		v.x=16+48+x*w	
-		v.y=64-(1-y)*w	
+		v.y=64-(-2-y)*w	
 	end
  
 	pal(14,0) 
@@ -116,7 +118,7 @@ function _draw()
 		printb("HI",101,1,1)
 		printb("HI",100,0,14)
 
-		local hi=padding(tostr(hi_score))
+		local hi=padding(score_tostr(hi_score))
 		printb(hi,83,7,0)
 		printb(hi,82,6,7)
 	end

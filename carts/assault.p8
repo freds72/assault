@@ -5,6 +5,7 @@ __lua__
 -- by @freds72
 
 #include includes/bold.lua
+#include includes/bigscore.lua
 
 -- misc helper functions
 local shkx,shky=0,0
@@ -49,6 +50,10 @@ end
 -- manhattan distance (safe for overflow)
 function dist(x0,y0,x1,y1)
 	return abs(x1-x0)+abs(y1-y0)
+end
+
+function padding(s)
+	return sub("00000",1,5-#s)..s
 end
 
 local dither_pat={0b1111111111111111,0b0111111111111111,0b0111111111011111,0b0101111111011111,0b0101111101011111,0b0101101101011111,0b0101101101011110,0b0101101001011110,0b0101101001011010,0b0001101001011010,0b0001101001001010,0b0000101001001010,0b0000101000001010,0b0000001000001010,0b0000001000001000,0b0000000000000000}
@@ -165,7 +170,7 @@ function make_plyr(x,y,z,angle)
 	local reload_ttl,reload_nuke_ttl,acc,da,dz,mortar_angle,underwater=0,0,0,0,0,0
 	-- threads positions & velocities
 	local lthread,rthread,lthread_acc,rthread_acc=0,0,0,0
-	local states,state,nuke_mode,driving_mode
+	local states,state,nuke_mode,driving_mode,dead_mode
 	local default_sprite=with_hitmask(make_sprite(96,16,16))
 	local flip_sprites,mortar_sprites={
 		[-1]={
@@ -242,7 +247,7 @@ function make_plyr(x,y,z,angle)
 	states={
 		drive=function()
 			local ttl=0
-			sprite,z,dz,driving_mode,nuke_mode=default_sprite,0,0,true
+			sprite,z,dz,driving_mode,nuke_mode,dead_mode=default_sprite,0,0,true
 			-- if(not trails) make_part({sw=2.5,dsw=-0.1,ttl=6000,c=6,kind=6,trail={}},58,120) make_part({sw=2.5,dsw=-0.1,ttl=6000,c=6,kind=6,trail={}},68,120)
 		
 			return function(self)
@@ -256,8 +261,8 @@ function make_plyr(x,y,z,angle)
 				-- reduce turn rate if driving while turning
 				local turn_scale=1
 				-- regular drive
-				if(btn(2)) acc+=0.05 turn_scale=0.7 lthread_acc=1 rthread_acc=1
-				if(btn(3)) acc-=0.05 turn_scale=0.7 lthread_acc=-1 rthread_acc=-1
+				if(btn(2)) acc+=0.04 turn_scale=0.7 lthread_acc=1 rthread_acc=1
+				if(btn(3)) acc-=0.04 turn_scale=0.7 lthread_acc=-1 rthread_acc=-1
 				
 				-- rotation
 				if(btn(0)) da=-0.01 lthread_acc=-turn_scale rthread_acc=turn_scale
@@ -387,11 +392,23 @@ function make_plyr(x,y,z,angle)
 					end
 				end
 			end
+		end,
+		die=function()
+			local ttl=40
+			acc,da=0,0
+			dead_mode,driving_mode,nuke_mode,underwater=true
+			return function(self)
+				ttl-=1
+				-- todo: wait for input + message + hide sprite
+				if(ttl<0) make_blast(x,y)
+			end
 		end
 	}
 
 	-- initial state
 	state=states.drop()
+
+	local bands={7,7,7,8,7,8,7,8}
 
 	return {
 		x=x,
@@ -402,38 +419,38 @@ function make_plyr(x,y,z,angle)
 		sw=16,
 		sh=16,
 		-- screen pos
-		sx=54,
+		sx=56,
 		sy=106,
 		get_pos=function()
 			return x,y,z,angle
 		end,
 		draw=function(self)
+			if(dead_mode) memset(0x5f01,lerpa(bands,(4*time()%1)),15)
 			if driving_mode then
 				if(underwater) pal(5,6)
 				if lthread_acc>0 then
-					spr(dust_sprites[flr(time_t/4)%3+1],64,119,1,1,false,true)
+					spr(dust_sprites[flr(time_t/4)%3+1],66,119,1,1,false,true)
 				elseif lthread_acc<0 then
-					spr(dust_sprites[flr(time_t/4)%3+1],64,104)
+					spr(dust_sprites[flr(time_t/4)%3+1],66,104)
 				end
 				if rthread_acc>0 then
-					spr(dust_sprites[flr(time_t/4+1)%3+1],52,119,1,1,true,true)
+					spr(dust_sprites[flr(time_t/4+1)%3+1],54,119,1,1,true,true)
 				elseif rthread_acc<0 then
-					spr(dust_sprites[flr(time_t/4+1)%3+1],52,104,1,1,true)
+					spr(dust_sprites[flr(time_t/4+1)%3+1],54,104,1,1,true)
 				end
-				pal()
+				if(underwater) pal()
 			end
 			-- player
 			if(underwater) pal(1,3) pal(9,11) pal(4,11)
-			spr(sprite.spr,self.sx,self.sy,2,2)
+			spr(sprite.spr,56,106,2,2)
 			
 			if driving_mode then
-				sspr(40+2*flr((lthread%3+3)%3),32,2,7,58,111)
-				sspr(40+2*flr((rthread%3+3)%3),32,2,7,64,111,2,7,true)
+				sspr(40+2*flr((lthread%3+3)%3),32,2,7,60,111)
+				sspr(40+2*flr((rthread%3+3)%3),32,2,7,66,111,2,7,true)
 				lthread+=lthread_acc
 				rthread+=rthread_acc
 			end
 			pal()
-			
 
 			if nuke_mode then
 				-- nuke estimated impact marker
@@ -459,8 +476,16 @@ function make_plyr(x,y,z,angle)
 				end
 			end
 		end,
+		collide=function(self,p)
+			if(dead_mode) return
+			local col,a,b,x0,y0,y1=collide(self,p)
+			if col and intersect_bitmasks(a,b,x0,y0,y1) then
+				return true
+			end
+		end,
 		hit=function()
-			-- make_blast(x,y)
+			-- prent
+			state=states.die()
 		end,
 		update=function(self)
 			reload_ttl-=1
@@ -505,11 +530,7 @@ function update_parts(parts)
 				-- top/left corner screen position
 				p.sx=64+shl(ca*x-sa*y,3)-p.sw/2
 				p.sy=112+shl(sa*x+ca*y,3)-p.sh/2
-
-				local col,a,b,x0,y0,y1=collide(p,plyr)
-				if col and intersect_bitmasks(a,b,x0,y0,y1) then
-					--local ax,ay=flr(a.sx),flr(a.sy)
-					--p.rect={ax+x0,ay+y0,ax+a.sw-1,ay+y1-1}
+				if plyr:collide(p) then
 					plyr:hit()
 					goto die
 				end
