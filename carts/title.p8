@@ -16,7 +16,7 @@ end
 
 local shkx,shky=0,0
 function cam_shake()
-	shkx,shky=min(1,shkx+rnd()),min(1,shky+rnd())
+	shkx,shky=0,1+rnd()
 end
 function cam_update()
 	shkx*=-0.7-rnd(0.2)
