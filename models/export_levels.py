@@ -130,23 +130,26 @@ def lzw_decode(data):
     print(y)
     return bytes(aux)
 
-def export_layer(layers, name):
+def get_layer_data(layers, name, firstgid):
     layer = layers[name]
     if layer is None:
         raise Exception("Layer: {} not found.".format(name))
 
-    print("exporting: {}".format(name))
     hexdata = base64.b64decode(layer.find('data').text)
     # convert to bytes (8 bits, not 32)
     data=bytes([])
     for i in range(0,len(hexdata),4):
         j = int.from_bytes(hexdata[i:i+4], byteorder='little', signed=False)
-        # Tiled uses 0 to indicate no tile
-        if j!=0: j-=1
+        # shift by first tile ID
+        if j!=0: j-=firstgid
         if j>255:
-            raise Exception("tile index too large: {}".format(j))
+            raise Exception("tile index too large: {} at {}/{}".format(j,int(i/4)%128,int(round(i/4/128,0))))
         data += bytes([j])
-    
+    return data
+
+def export_layer(layers, name):
+    print("exporting: {}".format(name))
+    data = get_layer_data(layers, name, 1)
     lzw = lzw_encode(data)
 
     # orig = lzw_decode(lzw)
@@ -161,11 +164,38 @@ def export_layer(layers, name):
         s += "{:02x}".format(b)
     return s
 
+def export_npcs(layers, name):
+    print("exporting level metadata")
+    data = get_layer_data(layers, name, 257)
+    x = 0
+    y = 0
+    s = ""
+    n = 0
+    for b in data:
+        if b!=0:
+            # byte layout
+            # actor ID
+            # x
+            # y
+            # angle
+            #print("found: {} at: {}/{}".format(b,x,y))
+            s += "{:02x}{:02x}{:02x}{:02x}".format(b,x,y,0)
+            n += 1
+        x += 1
+        if(x>127):
+            x=0
+            y+=1
+    # length (2 bytes)
+    l = "{:04x}".format(n)
+    # swap bytes
+    return l[2:4] + l[0:2] + s
+
 level_data = xml.parse(os.path.join(local_dir,'level.tmx'))
 layers = {layer.get('name'):layer for layer in level_data.getroot().findall('./layer')}
 
 s = export_layer(layers, 'level')
 s += export_layer(layers, 'actors')
+s += export_npcs(layers, 'npcs')
 
 #map_data=hexdata
 #if len(map_data)>0:
