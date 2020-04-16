@@ -28,7 +28,7 @@ foreground_sleep_ms 2 // number of milliseconds to sleep each frame. Try 10 to c
 
 background_sleep_ms 10 // number of milliseconds to sleep each frame when running in the background
 
-sessions 7 // number of times program has been run
+sessions 80 // number of times program has been run
 
 // (scancode) hold this key down and left-click to simulate right-click
 rmb_key 0 // 0 for none  226 for LALT
@@ -51,18 +51,18 @@ mix_buffer_size 1024
 
 // :: 
 
-version 0.1.12c
+version 0.2.0
 
 // audio volume: 0..256 
 volume 256
 
 
 // Location of pico-8's root folder
-root_path c:/Users/Frederic/Source/Repos/assault/carts/
+root_path C:/Users/fsouchu/Documents/GitHub/assault/carts/
 
 
 // Location of cartridge save data
-cdata_path c:/Users/Frederic/Source/Repos/assault/cdata/
+cdata_path C:/Users/fsouchu/Documents/GitHub/assault/cdata/
 
 
 // Specify which player index joystick control begins at (0..7)
@@ -78,7 +78,8 @@ live_notes 0
 // iff 1: when using keyboard cursor, snap to closest pixel / map cel
 cursor_snap 0
 
-// maximum length of gif in seconds (1..120, default 8)
+// default length of gif in seconds when the starting point is not specified
+// 0 to disable recording until ctrl-8 is pressed
 gif_len 8
 
 // 0 default  1 dark blue background in code editor  2 black background in code editor   3 gray background in code editor   
@@ -86,10 +87,7 @@ gui_theme 0
 
 // scale of screenshots and gifs // 2 means 256x256
 screenshot_scale 3
-gif_scale 2
-
-// when 1 can enter glyphs using shift-A..Z
-shift_glyphs 1
+gif_scale 3
 
 // 0 for off. 1 to allow control of a cart's framerate due to host machine's cpu capacity (recommended)
 host_framerate_control 1
@@ -99,5 +97,17 @@ host_framerate_control 1
 splore_filter 0
 
 // tab display width (1 ~ 4 spaces)
-tab_width 1
+tab_width 2
+
+// 0 off 1 on: draw tab characters as small vertical lines
+draw_tabs 0
+
+// 0 off 1 on: record the current cartridge and editor view every 3 seconds (see [appdata]/activity.log.txt)
+record_activity_log 1
+
+// 0 off 1 on: allow F6..F9 (alternative: ctrl 6..9)
+allow_function_keys 1
+
+// 0 off 1 on: automatically check for a newer version of a BBS cart each time it is run.
+check_for_cart_updates 1
 
