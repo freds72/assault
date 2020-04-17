@@ -173,7 +173,7 @@ def export_npcs(layer):
             # x
             # y
             # angle
-            print("found: {} at: {}/{}".format(b,x,y))
+            # print("found: {} at: {}/{}".format(b,x,y))
             s += "{:02x}{:02x}{:02x}{:02x}".format(b,x,y,0)
             n += 1
         x += 1
