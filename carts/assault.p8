@@ -30,8 +30,12 @@ end
 function lerpa(a,t)
 	return a[flr(#a*t)+1]
 end
+-- pick a random elt from an array
+function pick(a)
+	return lerpa(a,rnd())
+end
 
--- return 
+-- return shortest angle to target
 function make_lerp_angle(angle,pow)
 	return function(x0,y0,x1,y1)
 		local target_angle=atan2(x1-x0,-y1+y0)
@@ -121,7 +125,7 @@ function with_hitmask(sprite,tc)
 	for j=0,sh-1 do
 		local bits=0
 		for i=0,sw-1 do
-			if(sget(sx+i,sy+j)!=tc) bits=bor(bits,lshr(0x8000,i))  
+			if(sget(sx+i,sy+j)!=tc) bits|=0x8000>>i
 		end
 		bitmask[j]=bits
 	end
@@ -159,7 +163,8 @@ end
 -- game globals
 local time_t=0
 local jumppads={}
-local _npcs,plyr={}
+-- _groups stores number of instance of actors with a given group id
+local _npcs,plyr,_groups
 local _map,_cells,_cells_map,_grid,_map_lru
 
 -- todo: remove for optimisation
@@ -284,7 +289,7 @@ function make_plyr(x,y,z,angle)
 					y+=dy
 				end
 				-- gravel?
-				local area=bor(xarea,yarea)
+				local area=xarea|yarea
 				underwater=nil
 				if area==0x2 and abs(acc)>0.1 then
 					cam_shake()
@@ -292,7 +297,7 @@ function make_plyr(x,y,z,angle)
 				elseif area==0x8 then
 					underwater=true
 				elseif band(area,0x4)>0 then
-					local i=bor(flr(x),shl(flr(y),7))
+					local i=flr(x)|flr(y)<<7
 					local j=jumppads[i]
 					-- actvivate
 					if j and j>0 then
@@ -774,21 +779,21 @@ function decompress(mem,fn)
     while index < len or buffer_bits >= code_bits do
         -- read buffer
 		while index < len and buffer_bits < code_bits do
-			buffer=bor(shl(buffer,8),shr(peek(mem),16))
-        	buffer_bits+=8
+			buffer=buffer<<8|peek(mem)>>16
+      buffer_bits+=8
 			index+=1
 			mem+=1
 		end
-        -- find word
-        buffer_bits-=code_bits
-        local key=lshr(buffer,buffer_bits)
-		buffer=band(buffer,shl(0x0.0001,buffer_bits)-0x0.0001)
+    -- find word
+    buffer_bits-=code_bits
+    local key=buffer>>buffer_bits
+		buffer=band(buffer,(0x0.0001<<buffer_bits)-0x0.0001)
 		local word=code[key]
 		if(not word) word=array_add(prefix, prefix[1])
 
         -- store word
 		if prefix then
-			code[shr(code_len,16)]=array_add(prefix, word[1])
+			code[code_len>>16]=array_add(prefix, word[1])
 			code_len+=1
 		end
 		prefix = word
@@ -809,99 +814,24 @@ function decompress(mem,fn)
 end
 
 -->8
--- npc functions
-function pop(a)
-	if #a>0 then
-		local p=a[#a]
-		a[#a]=nil
-		return p
-	end
-end
-
--- a-star
-local a_sides={{1,0},{0,1},{-1,0},{0,-1}}
-function closest(x,y,nodes)
-	local score,node=32000
-	for _,v in pairs(nodes) do
-		local vscore=dist(v.x,v.y,x,y)
-		if vscore<score then
-			node,score=v,vscore
-		end
-	end
-	return node
-end
-function update_path_async(self)
-::seek::
-	while self.hp>0 do
-		local x1,y1=plyr.x,plyr.y
-		if self.flee then
-			-- todo: review
-			local pr,cr=whereami(plyr),whereami(self)
-			local r=rooms[flr(16*pr+8*cr+self.id)%#rooms+1]
-			x1,y1=rndlerp(r.x,r.x+r.w),rndlerp(r.y,r.y+r.h)
-		else
-			-- avoid all actors moving to player at once!
-			if dist(x1,y1,self.x,self.y)>96 then
-				yield()
-				goto seek
-			end
-		end
-	
-	 	local x,y=self.x,self.y
-		local k,pk=flr(x)+128*flr(y),flr(x1)+128*flr(y1)
-		local flood,flood_len={[k]={x=x,y=y,k=k}},1
-		local closedset,camefrom,current={},{}
-
-		-- a* (+keep cpu/memory limits)
-		while flood_len>0 and flood_len<24 do
-			current=closest(x1,y1,flood)
-			
-			x,y,k=current.x,current.y,current.k
-			if (k==pk) break
-			flood[k],closedset[k]=nil,true
-			flood_len-=1
-	
-			for _,d in pairs(a_sides) do
-				local nx,ny=x,y
-				-- works only for quadrants
-				-- not a wall?
-				if band(get_area({x=nx,y=ny,w=self.w,h=self.h},d[1],d[2]),0x1)==0 then
-					nx+=d[1]
-					ny+=d[2]
-				end
-				k=flr(nx)+128*flr(ny)
-				if not closedset[k] and not camefrom[k] then
-					flood[k],camefrom[k]={x=nx,y=ny,k=k},current
-					flood_len+=1
-				end
-			end
-		end
-	
-		local path,prev={},current
-		while current do
-			add(path,current)
-			prev,current=current,camefrom[current.k]
-		end
-		self.path=path
-
-		-- wait path completion or timeout
-		local t=time_t+self.seek_dly
-		while #self.path>0 do
-			if(t<time_t) break
-			yield()
-		end
-		self.input=nil
-	end
-end
-
 -- npc 
+local _npc_map={}
+function is_npc(x,y)
+	return _npc_map[flr(x)|flr(y)>>7]
+end
+function solid_npc(a,dx,dy)
+	local x,y,w,h=a.x+dx,a.y+dy,a.w,a.h
+	return is_npc(x-w,y-h) or is_npc(x+w,y-h) or is_npc(x-w,y+h) or is_npc(x+w,y+h)
+end
+
 function make_npc(base,x,y)
-	local angle,hit_t=0,0
+	local angle,acc,hit_t=0,0,0
+
 	-- quad
 	-- texspace -> world space
 	-- note: useless for 'map' npc
 	local s=base.sprite or base
-	local w,h=s.sw/16,s.sh/16
+	local w,h=s.sw>>4,s.sh>>4
 	-- x---->x
 	--    0  |
 	-- x<----x
@@ -930,25 +860,29 @@ function make_npc(base,x,y)
 			local outcode=0xffff
 			for _,g in pairs(quad) do
 				-- rotate in local space
-				local ix,iy=g.ix,g.iy
+				local ix,iy,code=g.ix,g.iy,0
 				-- translate to cam space
 				ix,iy=scale*(ca*ix-sa*iy)+x1,scale*(sa*ix+ca*iy)+y1
-				local code=0
 				if ix>14 then code=2
 				elseif ix<2 then code=1 end
 				if iy>16 then code+=8
 				elseif iy<0 then code+=4 end
-				outcode=band(outcode,code)
+				outcode&=code
 				-- to screen space
-				g.x=8*ix
-				g.y=8*iy
+				g.x=ix<<3
+				g.y=iy<<3
 			end
 			-- visible?
+			self.visible=false
 			if outcode==0 then
+				-- used to stop firing when not visible!
+				self.visible=true
 				if(hit_t>0) memset(0x5f01,0x7,15) palt(0,true)
 				tquad(quad,self.uv)
 				pal()
-				--print(self.z,8*x1+8,8*y1,2)
+				if self.state then
+					print(self.state,8*x1+8,8*y1,2)
+				end
 			end
 			--[[
 			if self.input then
@@ -976,7 +910,37 @@ function make_npc(base,x,y)
 		end,
 		update=function(self)
 			hit_t-=1
-			angle=self:control()
+			-- prev pos
+			_npc_map[flr(self.x)|flr(self.y)>>7]=nil
+
+			local move,target_angle=self:control()
+			if target_angle then
+				angle=target_angle
+			end
+			if false then --move then
+				acc+=self.acc
+				local dx,dy=acc*cos(angle),-acc*sin(angle)
+
+				-- update pos
+				local xarea,yarea=get_area(self,dx,0),get_area(self,0,dy)
+				local xother,yother=solid_npc(self,dx,0),solid_npc(self,0,dy)
+	
+				-- solid?
+				if not xother and band(xarea,0x1)==0 then
+					self.x+=dx
+				else
+					acc=0
+				end
+				if not yother and band(yarea,0x1)==0 then
+					self.y+=dy
+				else
+					acc=0
+				end
+				_npc_map[flr(self.x)|flr(self.y)>>7]=true
+
+				-- friction
+				acc*=self.friction
+			end
 		end,
 		collide=function(self,p)
 			-- to npc base
@@ -1012,13 +976,83 @@ local npc_id=0
 local light_tank_sprite=with_hitmask(make_sprite(64,16,16))
 
 function make_tank(x,y)
-	local acc,move_t=0.1,0
-	local update_path=cocreate(update_path_async)
-	local lerp_angle=make_lerp_angle(0,0.1)
-	local dx,dy=0,0
-	-- can npc move?
-	local id=npc_id
-	npc_id+=1
+	local angle,reload_ttl,states,state=0,25
+	
+	local function fire_bullet(self)
+		if reload_ttl<0 and self.visible then
+			local ca,sa=cos(angle),-sin(angle)
+			make_bullet(small_bullet_cls,self.x+ca,self.y+sa,0,ca/2,sa/2)
+			reload_ttl=25
+		end
+	end
+
+	states={
+		-- rotate
+		function(self)
+			local ttl,target_angle=10,angle+0.25-rnd(0.5)
+			local think="?"
+			-- if close enough, lock on player
+			local x,y,px,py=self.x,self.y,plyr.x,plyr.y
+			if dist(x,y,px,py)<8 then
+				target_angle=atan2(px-x,-py+y)
+				-- shortest angle
+				local dtheta=target_angle-angle
+				if dtheta>0.5 then
+					angle+=1
+				elseif dtheta<-0.5 then
+					angle-=1
+				end				
+				think="☉"
+			end
+
+			return function()
+				ttl-=1
+				if(ttl<0) state=pick(states)(self)
+				angle=lerp(angle,target_angle,0.1)
+				--self.state=think.."\n"..angle.."\n"..target_angle
+				return false,angle
+			end
+		end,
+		-- move
+		function(self)
+			local ttl=10+rnd(10)
+			return function()
+				ttl-=1
+				if(ttl<0) state=pick(states)(self)
+				return true,angle
+			end
+		end,
+		-- wait
+		function(self)
+			local ttl=5+rnd(10)
+			return function()
+				ttl-=1
+				if(ttl<0) state=pick(states)(self)
+				return false,angle
+			end
+		end,
+		-- fire
+		function(self)
+			return function()
+				local x,y,px,py=self.x,self.y,plyr.x,plyr.y
+				if dist(x,y,px,py)<8 then
+					local target_angle,angle=atan2(px-x,-py+y),angle
+					-- shortest angle
+					local dtheta=target_angle-angle
+					if dtheta>0.5 then
+						angle+=1
+					elseif dtheta<-0.5 then
+						angle-=1
+					end	
+					if abs(target_angle-angle)<0.1 then
+						--self.state="fire: "..abs(target_angle-angle)
+						fire_bullet(self)
+					end
+				end
+				state=pick(states)(self)
+			end
+		end
+	}
 
 	local tank={
 		w=0.8,
@@ -1030,52 +1064,16 @@ function make_tank(x,y)
 			2,2,
 			0,2},
 		hp=1,
-		-- co-routine data
-		seek_dly=60,
-		path={},
+		acc=0.008,
+		friction=0.9,
+		side=1,
 		control=function(self)
-			move_t-=1
-			local angle=0
-			if move_t<0 and #self.path>0 then
-				-- get result from a*
-				local input=self.input
-				if not input or dist(self.x,self.y,input.x,input.y)<1 then
-					input=pop(self.path)
-					self.input=input
-				end
-				if input then
-					angle=lerp_angle(input.x,input.y,self.x,self.y)
-
-					local ca,sa=cos(angle),sin(angle)
-					dx=0.1*ca
-					dy=0.1*sa
-					
-					--[[
-					local u,v=normalize(input.x-self.x,input.y-self.y,0.8*base.acc)
-					dx=u
-					dy=v
-					]]
-				end
+			reload_ttl-=1
+			-- idle?
+			if not state and dist(self.x,self.y,plyr.x,plyr.y)<20 then
+				state,reload_ttl=pick(states)(self),30
 			end
-	
-			-- update pos
-			local xarea,yarea=get_area(self,dx,0),get_area(self,0,dy)
-			-- solid?
-			if band(xarea,0x1)==0 then
-				self.x+=dx
-			end
-			if band(yarea,0x1)==0 then
-				self.y+=dy
-			end
-			dx*=0.9
-			dy*=0.9
-	
-			-- compute path for only 1 actor/frame
-			if id==(time_t%npc_id) then
-				assert(coresume(update_path,self))
-			end
-
-			return angle
+			if(state) return state(self)
 		end
 	}
 
@@ -1085,7 +1083,6 @@ end
 local heavy_tank_sprite=with_hitmask(make_sprite(182,32,16))
 function make_heavy_tank(x,y)
 	local angle,acc,move_t=0,0.1,0
-	local update_path=cocreate(update_path_async)
 	local dx,dy=0,0
 	-- can npc move?
 	local id=npc_id
@@ -1105,7 +1102,7 @@ function make_heavy_tank(x,y)
 		seek_dly=60,
 		path={},
 		control=function(self)
-			return 0.1
+			return false,0
 		end
 	}
 
@@ -1115,7 +1112,6 @@ end
 local msl_tank_sprite=with_hitmask(make_sprite(178,32,16))
 function make_msl_tank(x,y)
 	local angle,acc,move_t,reload_ttl=0,0.1,0,0
-	local update_path=cocreate(update_path_async)
 	local dx,dy=0,0
 	-- can npc move?
 	local id=npc_id
@@ -1145,7 +1141,7 @@ function make_msl_tank(x,y)
 					end
 				end)
 			end
-			return 0
+			return false,0
 		end
 	}
 
@@ -1154,7 +1150,8 @@ end
 
 local heavy_turret_sprite=with_hitmask(make_sprite(76,32,24))
 function make_heavy_turret(x,y,group)
-	local reload_ttl,toward=0,make_lerp_angle(0,0.1)
+	local toward=make_lerp_angle(0,0.1)
+	local reload_delay,reload_ttl=_groups[group]*40
 	local turret={
 		uv={
 			2,0,
@@ -1167,10 +1164,16 @@ function make_heavy_turret(x,y,group)
 			-- account for turret size
 			local x,y=self.x,self.y
 			local angle=toward(x,y,plyr.x,plyr.y)
-
 			-- close enough?
+			-- todo: move activate as a shared property
+			if not reload_ttl and dist(x,y,plyr.x,plyr.y)<20 then
+				reload_ttl=reload_delay
+			end
+			-- not active
+			if(not reload_ttl) return angle
+
 			reload_ttl-=1
-			if reload_ttl<0 and dist(x,y,plyr.x,plyr.y)<20 then
+			if reload_ttl<0 then
 				reload_ttl=40
 				local ca,sa=cos(angle),-sin(angle)
 				-- center position
@@ -1184,7 +1187,7 @@ function make_heavy_turret(x,y,group)
 					end)
 				end
 			end
-			return angle
+			return false,angle
 		end
 	}
 	return make_npc(turret,x,y)
@@ -1269,7 +1272,6 @@ function make_msl_silo(x,y)
 					--hidden=true
 				end)
 			end
-			return 0
 		end
 	}
 	return make_npc(turret,x,y)
@@ -1279,11 +1281,12 @@ end
 function make_msl(x,y)
 	-- get direction
 	local ttl,angle=0,atan2(plyr.x-x+0.5,-plyr.y+y+0.5)
-	local dx,dy,dz=0.2*cos(angle),-0.2*sin(angle),0.4
 
 	local msl={
 		sw=8,
 		sh=8,
+		acc=0.2,
+		friction=1,
 		collide=function() end,
 		control=function(self) 
 			ttl+=1
@@ -1294,12 +1297,10 @@ function make_msl(x,y)
 				7+du,0,
 				7+du,1,
 				6+du,1}
-			self.x+=dx
-			self.y+=dy
 			self.z+=dz
 			if(ttl<0 or self.z<0) self:die() return
 			dz+=gravity
-			return angle 
+			return true,angle 
 		end
 	}
 	return make_npc(msl,x,y)
@@ -1318,6 +1319,8 @@ function make_homing_msl(x,y,angle)
 			2,2,
 			2,3,
 			1,3},
+		acc=0.04,
+		friction=0.87,
 		collide=function() end,
 		control=function(self) 
 			ttl-=1
@@ -1328,17 +1331,7 @@ function make_homing_msl(x,y,angle)
 			if angle_ttl<0 then 
 				angle=toward(self.x+0.5,self.y+0.5,plyr.x,plyr.y)
 			end
-
-			local dx,dy=(0.2+acc)*cos(angle),-(0.2+acc)*sin(angle)
-			acc*=0.87
-			-- solid?
-			if bor(band(get_area(self,dx,0),0x1),band(get_area(self,0,dy),0x1))!=0 then
-				self:die()
-			else
-				self.x+=dx
-				self.y+=dy
-			end
-			return angle 
+			return true,angle 
 		end
 	}
 	return make_npc(msl,x,y)
@@ -1350,38 +1343,35 @@ end
 
 -- check for the given tile flag
 function fmget(x,y)
-	return fget(_map[flr(x)+128*flr(y)])
+	return fget(_map[flr(x)|flr(y)<<7])
 end
 -- return true if solid tile for a bullet
 -- 0x1 + 0x2
 function bullet_solid(x,y)
-	return band(fget(_map[flr(x)+128*flr(y)]),3)==3
+	return band(fget(_map[flr(x)|flr(y)<<7]),3)==3
 end
 
 function get_area(a,dx,dy)
 	local x,y,w,h=a.x+dx,a.y+dy,a.w,a.h
 	return 
-		bor(
-			bor(fmget(x-w,y-h),
-			fmget(x+w,y-h)),
-			bor(fmget(x-w,y+h),
-			fmget(x+w,y+h)))
+		fmget(x-w,y-h)|
+		fmget(x+w,y-h)|
+		fmget(x-w,y+h)|
+		fmget(x+w,y+h)
 end
 
 function map_set(i,j,s)
 	-- no need to track 'static' tiles
-	if(fget(s)!=0) _map[i+128*j]=s
+	if(fget(s)!=0) _map[i|j<<7]=s
 	-- cell coord (128x128)->(4x4)
-	local ck=flr(i/32)+4*flr(j/32)
+	local ck=i\32+(j\32<<2)
 	local cell_map=_cells_map[ck]
 	-- cell is 4*dword with a stride of 128/4 = 32
 	-- cell entry is packed as a dword
-	local k=4*(flr(band(i,31)/4)+32*band(j,31))
+	local k=(band(i,31)\4<<2)+(band(j,31)<<7)
 	-- shift 
-	local shift=8*(i%4)
-	cell_map[k]=bor(
-		band(cell_map[k] or 0,rotl(0xffff.ff00,shift)),
-		shl(0x0.0001,shift)*s)
+	local shift=(i%4)<<3
+	cell_map[k]=(cell_map[k] or 0)&rotl(0xffff.ff00,shift) | (0x0.0001<<shift)*s
 
 	-- invalidate cache
 	for _,entry in pairs(_map_lru) do
@@ -1395,16 +1385,15 @@ function draw_map(x,y,z,a)
 	-- project all potential tiles
 	for i,g in pairs(_grid) do
 		-- to cam space
-		local ix,iy=32*(i%5)-x,32*flr(i/5)-y
+		local ix,iy,outcode=((i%5)<<5)-x,(i\5<<5)-y,0
 		ix,iy=scale*(ca*ix+sa*iy)+8,scale*(-sa*ix+ca*iy)+14
-		local outcode=0
 		if ix>14 then outcode=2
 		elseif ix<2 then outcode=1 end
 		if iy>16 then outcode+=8
 		elseif iy<0 then outcode+=4 end
 		-- to screen space
-		g.x=8*ix
-		g.y=8*iy
+		g.x=ix<<3
+		g.y=iy<<3
 		g.outcode=outcode
 	end
 	
@@ -1412,10 +1401,10 @@ function draw_map(x,y,z,a)
 	local viz={}
 	for k,cell in pairs(_cells) do
 		-- visible or partially visible?
-		if band(
-			band(cell[1].outcode,
-	   		band(cell[2].outcode,cell[3].outcode)),
-			   cell[4].outcode)==0 then
+		if(cell[1].outcode&
+			 cell[2].outcode&
+			 cell[3].outcode&
+			 cell[4].outcode)==0 then
 			viz[k]=cell
 		end
 	end
@@ -1424,7 +1413,7 @@ function draw_map(x,y,z,a)
 	for i,entry in pairs(_map_lru) do
 		local cell=viz[entry.k]
 		if cell then
-			local offset=32*i
+			local offset=i<<5
 			tquad(cell,{
 				offset,0,
 				32+offset,0,
@@ -1459,7 +1448,7 @@ function draw_map(x,y,z,a)
 			poke4(mem+base,v)
 		end
 		-- draw with fresh cache entry		
-		local offset=32*mini
+		local offset=mini<<5
 		tquad(cell,{
 			offset,0,
 			32+offset,0,
@@ -1485,7 +1474,8 @@ end
 function play_state()
 	local lives=3
 	-- reset
-	_npcs,_parts,_bullets={},{},{}
+	-- max 3 groups
+	_npcs,_parts,_bullets,_groups={},{},{},{0,0,0}
 
 	-- init map
 	-- collision map
@@ -1540,14 +1530,14 @@ function play_state()
 		[2]=make_tank,
 		[3]=make_tank,
 		[4]=make_tank,
-		[5]=function(x,y) make_heavy_turret(x,y,1) end,
-		[6]=function(x,y) make_heavy_turret(x,y,2) end,
-		[7]=function(x,y) make_heavy_turret(x,y,3) end,
+		[5]=function(x,y) make_heavy_turret(x,y,1) _groups[1]+=1  end,
+		[6]=function(x,y) make_heavy_turret(x,y,2) _groups[2]+=1 end,
+		[7]=function(x,y) make_heavy_turret(x,y,3) _groups[3]+=1 end,
 		[17]=make_msl_tank,
 		[18]=make_msl_tank,
 		[19]=make_msl_tank,
 		[20]=make_msl_tank,
-		[48]=function(x,y,a) plyr=make_plyr(x,y,64,a) end,
+		[48]=function(x,y,a) plyr=make_plyr(x,y,8,a) end,
 		[49]=make_msl_silo
 	}
 
@@ -1556,7 +1546,7 @@ function play_state()
 	for i=1,n do
 		local id,x,y,a=peek(mem),peek(mem+1),peek(mem+2),peek(mem+3)
 		local fn=actor_factory[id]
-		assert(fn,"unknown actor id:"..id.."@"..i)
+		assert(fn,"unknown actor id:"..id.."@"..x.."/"..y)
 		fn(x,y,a)
 		mem+=4
 	end
@@ -1635,8 +1625,8 @@ end
 
 local _state
 function _init()
-	
-	--add(_npcs,make_tank(33,60))
+
+	-- todo: remove, not needed for multicart
 	_state=play_state()
 
 end
@@ -1777,14 +1767,14 @@ dddddddd3533333333535d33dddddddd111111111ddddddd11111111daaddddddddddddd33333333
 00001100d6b6bbbbbbbbbbbbbbb6b65d5555000000055000005500000000090d6090000000000000000000000000000035dddddddddd888d6888dddddddddd63
 01000000d6bbbbbbbbbbbbbbbbb6b65d5555000000050000000000000000969289690000000000d88d000000000000005dddddddddd8888678888dddddddddd6
 00000000d66bbbbbbbbbbbbbbbbb665d0550000000000000000000000000d595d95d000000006d95d9d60000000000001dd67ddddddddd688766dddddddd67d6
-00000000d6b6bbbbbbbbbbbbbbbbb65ddddddddd79977997dddddddd000fd546645df0000004989679899000000000001d5d6ddddddd55d886ddddddddd5d6d6
-00000000d66bbbbbbbbbbbbbbbb6665ddddddddd77997799dddddddd00096d49f9d69000000542249224d000000000001d55ddddddd8888d68888dddddd55dd5
-00000000d6bbbbbbbbbbbbbbbbbb665ddddddddddddddddddddddddd00049f0490f9400000005502205500000000000031dddddddddd8885d888dddddddddd53
-00000000d6bbbbbbbbbbbbbbbbbbb65dddddddddddddddddd777777d0005480000845000000000000000000000000000331dddddddddd885d88dddddddddd533
-00000000d666bbbbbbbbbbbbbbbb665dddddddddddddddddd777777d00005500005500000000000000000000000000003331dddddddddd8dd8dddddddddd5333
-00000000d6b6bbbbbbbbbbbbbbb6b65ddddddddddddddddddddddddd000000000000000000000000000000000000000033331ddd888dddddddddd888ddd53333
-00000000d66bbbbbbbbbbbbbbbb6665d99779977dddddddddddddddd0000000000000000000000000000000000000000334331ddd88dddddddddd88ddd533443
-00000000d6bbbbbbbbbbbbbbbbbbb65d79977997dddddddddddddddd00000000000000000000000000000000000000003443331ddd8dddddddddd8ddd5334344
+bbbbbbbbd6b6bbbbbbbbbbbbbbbbb65ddddddddd79977997dddddddd000fd546645df0000004989679899000000000001d5d6ddddddd55d886ddddddddd5d6d6
+b66bbbbbd66bbbbbbbbbbbbbbbb6665ddddddddd77997799dddddddd00096d49f9d69000000542249224d000000000001d55ddddddd8888d68888dddddd55dd5
+b66bb6bbd6bbbbbbbbbbbbbbbbbb665ddddddddddddddddddddddddd00049f0490f9400000005502205500000000000031dddddddddd8885d888dddddddddd53
+bbbbb66bd6bbbbbbbbbbbbbbbbbbb65dddddddddddddddddd777777d0005480000845000000000000000000000000000331dddddddddd885d88dddddddddd533
+bbbbbbbbd666bbbbbbbbbbbbbbbb665dddddddddddddddddd777777d00005500005500000000000000000000000000003331dddddddddd8dd8dddddddddd5333
+bb66bbbbd6b6bbbbbbbbbbbbbbb6b65ddddddddddddddddddddddddd000000000000000000000000000000000000000033331ddd888dddddddddd888ddd53333
+bb66bbbbd66bbbbbbbbbbbbbbbb6665d99779977dddddddddddddddd0000000000000000000000000000000000000000334331ddd88dddddddddd88ddd533443
+bbbbbbbbd6bbbbbbbbbbbbbbbbbbb65d79977997dddddddddddddddd00000000000000000000000000000000000000003443331ddd8dddddddddd8ddd5334344
 00000000d6bbbbbbbbbbbbbbbbbb665ddddddd9777dddddd00000000000000000000000000000000000000000000000034443331dddddddddddddddd53444444
 00000000d666bbbbbbbbbbbbbbb6665ddddddd9997dddddd000000000000000000000000000000000000000000000000334333331dddddddddddddd533443433
 04044400d66bbbbbbbbbbbbbbbbbb65ddddddd7999dddddd0000000000000000000000000000000000000000000000003333333331dddddddddddd5334433333
@@ -1927,17 +1917,23 @@ __gff__
 00000303030000000000000001010101c10103000300000000000000010101010101030303000000030000000101a1010002020000000000000000000101010100000000000000000000020200000000000000000000000000000202000000000000000000000000000303030000000000000000000000000003030300000000
 0000000000000000000003030202000000000000000000000000030302020000000000000002000000000000000001010303000000000000000000000000010103030000000000000000000000000000000000000000000000000000000000000000080000000000000000000000040000000000000000000000000000000000
 __map__
-290500804060503824160d0784426150b864361d0f8844625138a4562d178c4661cd08e4763d1f8f46a4523884740403944a6552b94811a124984c608d093ca182ac9c4e6753b9c2a8292f9950660d0094e403470084e954ba65327d40a15463344a50140d57ac5600f56ac8180f4fa95862f54008540b5b0385acf670b8dc71
-6f1c2b95e17b058aed12b20544a27bd85af77bb6dc070be5fdd27f77c443ef273c61cc2d8d3985c4a26ca6544f75c4e6613790b6773d9e0bd369798cd6966612a505467abd66b3434d5808c4624a869b6d00aa04c2b9fde6be96a99fc736fc3dc08846b1ddef341b1d96cb69c4e80023812e4f282c170947fa3dba21d33bdeef
-f7fb3dbf26e0240c068381e750b0dbd1eaf1f97b8120e0743c1fce8d3ebf7f8fcba1440b02d0b82f7e60180dfd7f9c35103c0f43e0fdec0d20c83a08825b651034860357e6180d03504a157fdd47599d761b5881a5511936562b0982785227665b952233004aa8be3062144525a204e358de385d9b98f0138da2690177592439
-1511481c291d256a14a0401194a5492d1b4d52b4ba4d91a4f4063a528200866198e5742d3400d374f0c04b1284ba5e4166092a3f9c4122b54b94d4b2ad3c4e0c09be7040a428f26642a829894d23a8953987a025f9467397506a094b0049f2389fa609ea5d4b9fa9190293534aba7520a4a8fa508f27c8f23c9ea589f2789e52
-9a497934306435326c4b27fa0651330cd338cf5289eaae9aaaeaa27d4aa7680ad2789514c9e67b9ae5b47e51370dd378df53001a5eaf23aab8eec9acea6a1d4cb8e43ae12bad4133b0ed3b8efad813ab23baca38a82430c432be2f70c43104ed04ea77528fc3f4fe3feef8f547b22baa7ea6bbef7be30fbeeef8d14a731cd6c8
-b152af29d21508b18c4b0f0cafabec32c4948c51b44830ca129fc7712beefcc3b3190e33528a98be93caf2cc7b330c708cc7218f234526f3ce31b882f56882852721beb41c4f44cab4674a5c475b6cb706c6720c1b089128caed4dce5039a26d9ba9e5874868949c8eb60a42a8ef5d91a93a8b0ad88029aa7c2b2e066776bbc2
-8a523dc46430e43ad7350dff09976cbc1b7a9230cd6f6f536fcc668bdc651d72448df7cd6013a8d88e6b58cd3690a39204f6dac75ea3b19e17a8799a22c128cefa69b2d2d991ada369c9a3ccf54be0fa7e57aa8ef7389a93cdaf8053a50abbd04f794b64e4cb9fe3fb9e6fbe69fc0dbf8ce7f6d8daf7f1fca9e939ecfce48fb7
-53742c377e68fac74a8ff4b9c013a9ef03aa89b2ba54ae9aa1f337454f8e8f2ddd0b90344e90d88244eaa51f69d9238f4183383800fa5da9137c804d4c2967fc0056109e81a52ce61cf80b0191ea9c252fd5cdb087d0d81f51181a0d5d5b08e55eb09552ab5530360dbe22670a983b5c5a0c0211b4a832f50a1c36344aa15529
-a85827e0c94f81eeb5f2ada11e5254ca9887af58a6bf76e04ca149cd6765315644f8647360210d540a561628955aa6154397897001ef2f37c6470e31c77a6c9daa90f88105a17aaf55cab562c512991521f1510351ba2caef161071264758f0a254d4788b71f1f8c2689248a2bc8383517a48907926f9616c788a11a238c7f48
-31bd9dc0324258ce34597ff0018ac5860d1b1b38d078e04e42c9724b1024232823cff1ca1a68df21a1fb169813065f1d28df3058b4c33131cca13545489c6664ca51b346694d39a93566b4d79b13666d4db9b93766f4df9c1386714e39c9396734e79d13a6754eb9d93b6774ef9e13c6794f39e93d67b4f79f13e67d4fb9f93f
-67f4ffa0140681503a0941683507a114268550ba194368750fa2144689513a294568b517a314668d51b22aff0040209309a4e27a8142a200426150b864361d0f8844625138a4562a5028970ba5e2fb6db91690486452392458c4f0361b4dc6f75bb24b2f984c6650c5b2dd70b9592cd68b599cf67d3f88b198ec864b0986c462
-d02954ba65369d4fa8546a553aa556ad57ac566b55bae576bd5fb0586c563b2596cd67b45a6d56bb65b6dd6fb85c6e573ba5d6ed77bc5e6f57bbe5f6fd7fc06070583c26170d87c4627158bc66371d8fc86472593ca6572d97cc667359bce6773d9fd068745a3d26974da7d46a755abd66b75dafd86c765b3da6d76db7dc6e77
-5bbde6f77dbfe070785c3e27178dc7e472795cbe67379dcfe8747a5d3ea757add7ec767b5dbee777bddf8800180002392300023826000111280001152800042828000120290004242900042a2a00110f2c0001142c0001162c0004282c0001102e0001392e0001142f0004252f0001193000110c3100013e310001113400011f
-3400013b340031513700305f3900
+ed0800804060503824160d0784426150b864361d0f8844625138a4562d178c46622d08e476350d8ec86452390c7e32d00100e5403024724d08944ae65339a4aa5b2f8aca182ac9e2b1812c684e2093a9ed168d479e3026f42884e8274fa82a82941a64029d50ac566b550a5552ab308e809835b09d763d0ab3c264362b25b6b5
+52af57e0b319558edb3f95d2ee7299b5c60774badb86232188c40350c1e129f70b941a88ac56dba9f45aedee7749bd40b1f90c96270a0100e246432c5d4f1b43b664a9ed169349a75ccc802afb0bf6ceb3831884f0fbad1ef77dbdc3e334f9a09567775a68b81c4e2706bc2770915b34158b3586ed5ad16e775a2dfefb0dc2e1
+d5b8b4fe9d6758d2e572f99ad69de265d74723f8feec0e23bbf7fc6fc63e0f0b43c7ba71dab7a5ea811cc34d46645e42788e7941351609791f9849f97f1c37f95071de772a03815cb381ad7b2186809e27e0d590016f9878a1fa779dc6f9656c58d340222c5e46ece1876058720438e186ea3f6824156ddc861fa679bd615bf6
+1dd54895f8ce35562388e6538f23e9060190d846e1c7776477e5bb7d1795f92f93d583c63b952058f5e404cb008e6f9c271940139698a562137e1da64d47655559955099e049a21d380f3560b0091244763453e2f56e2b975a39267664a7d5321794669a12865428898d9aa319e89e908b6930ca5859215991ff53e52a6a1ea7
+1a5a7d7fab1aa681d9776225b6aa49a98542aea1282ac6b25a2b56a9bc9e55895e58af11fafaadabdccb0ec45aac67da925665d64a26b351ab3c13a069a9ad59b7501b7d587727a8baa871a00545a6a5da999a83955ab7b2e578aba5421367eb66ee01a5abdbc959b029bafdcb38ef86c9ff89ae98b5879ba719be7371e58c05
+27c0e01c16c2a64e2c26f04c1c595d5a7dd9f0069e48e8c9b164c5d166d95a3c4f23ca68b8ed0c7a30acee6c8a42ba325c428941b2a8ff2c8c514b7e26a023bcd41394a6bcb5c49015b921bd53e9e423428dae4c8117b3f3c71b057371db8f4fbe75eb5dbf73f5bd04b12308ddb76dd6b3946eb5d21e4c6f61cdb788c10785e5
+8ba5d9da7727889c27784e1371b7b58d0e227270653f31cc8f273acdb9e749d5fae06c5dbf6e236cac290f9ff2b80001e361dd2e666bf94b5a928b9a4e66d5e1b85276360079fe838a88b1bc216e384d3ea9d8eb35376b0a7fb9bdc013e6f6a46395802ae873a79471facedf8b7ac563c404bb1e1c13ec7cad72d6dda53b8ccc
+334ce33ebff4907d63259e9b4b57c6e77c8e73decbbe06ebbacdd4f370dd378dffa2dd4fea91f6ba2670c85ed09d30ef75c11127986e970a6a47e3b0768ee1deffdfa1565186856c15a62cd14f13f030ef2605b732da682079ea1c674c7e0fd1fc3fe0b38249ed99769596c87fa03c0976505da33f6482b00e54292da385f4ad
+56eabe9ebbf478ae71b6c217e708ca6bf67c29aa22b4c886c8622c325a850decbb27090e1c243a22703628a821a6bb0e4c556f8049764588b2ad01482a73653e112ab2dc681dd21f4411e61fbd85da74d763af8b40e41d3b129f02a3a41c8fd09d68c6831c78e37ba36bcf91f34808dd1c1ce1ba8e6af5ba3a33c92297147c02
+720995a017f6ff64a1c490521000c86934718d01f263a73199203694f6237cb70550ca0941494ece9f849889b21d11224634ac1c7af447ad90ab1629053341d3592a10ae16cbd707171d9cab873139d03743e27c533332586e41c8b333966bd261232d923d0048f8ff35185cbf7e4db63040c61888c4fcc444e5b540b614c24c
+cbb4a237720a76cee86d358dd4ac5bcc6400cdd960a3e76cfb39c56a5c15897061e7515b754c8dac82876c480b125811c82c4f453716bb68815b99c56294ca199eaa6241e3050804ddd1d2164e95400113e7c69245730e949bd159a265425c5172b4d58b9c509dc46e8fc6ba4740e483b48ec7aa9f950a5653e674a22b751aa3
+d442b1472799208d53b51554e920bfd702035c75128b02aa295b2a156e4dad0234d582b1265efd2458f118ac8f185155296a36ae94b29552dab5236023dc9b249eb0d798eb40d1c0e06f13aa765412da2a6799fe30e0a0acd767eb59163a013ce6b99b206b05696aad2e816d74ddd08b3b5e593b12626835d2da481ef4237a58
+b28706cb8128413c446d5f219662a71a0650489ac58fafab82e4aeeb4b60eac1d37b10dec445f9b4b156d9bab0ab99a12e187ec1d429e4b255baf0d59ae4c86ded9c27208811a7351f765502739c43c9588e1bbf5faab52dab1605aade580d41ae989db81705d09c6b2d0c2a4467adf6e01559453a08efe5e6894fc6f435c770
+6e97c298596541c6ae3a04566abd7f29f8166d5059097ff0090e72aed6302e738ee4158db7ade64a9a4498e36fb13d6051f85d6b51ab078f565388ac101e42d8995b46315c50c3363724d49a8f0c915534c7191b031c88f26bebc50b3e46829d46dbad4dce9cca8c2fdb302df71a3827049c59596847a24cd94eadd5d5b853e5
+9c28ace85a62d4ed994a610d1cb5a6e2e3f1a013e23c479f1a7396f19c6a84a5709ae8b26707acc16e62e75809db39cabdad150e44937690a0ccdf8a3241581580141b00c01a0380787500e520ca345d1fa40bd1742c7a51696933d354d0c699d07a0b436278c45680a8340380740f01f02c05f193ded5aaed902cf636a1b32b
+bb5479b340ebbce1520acebf0580b41702fd8a01b6f6dfdc001d5e6c9b50ce98ea1b538c15e84aecda23f2645ab1804f5f83c07a0f81f87502e0dc1c6fbdf8058570af02fb8d1a5033c1b317ad67aa4e9d88b1344490743ef1d7fa93536f8df5bf37d81617c2ff80d2fe09b2d9db4c399b41c7ce35a771701e4fd79b58ac6bfd
+83b0f62826e61cc7990277298554ede56fb68efa9aab0b80efde70e6c56f6c6dadb9b18b7400d11790b8f39e41acd63deec077b8b47412b20941a6f4dec1d413992ea5062d8270c1edf4c3e2e6abd7d8960fbb49c7b45c1bd5d9bb776fecf0c33aef0a4bcff3a92e6f893630f77ef9ddd6741941bd74f0f83c297b2b8dd5f09e
+249076dec1e23c578f2d048fc8793f29e57cb797f31e67cd79bf39e77cf79ff41e87d17a3f49e97d37a7f51ea7d57abf59eb7d77aff61ec7d97b3f69ed7db7b7f71ee7dd7bbf79ef7df7bff81f07e17c3f89f17e37c7f91f27e57cbf99f37e77cffa1f47e97d3fa9f57eb7d7fb0498ff0040209309a4e27a8142a200426150b8
+64361d0f8844625138a4562a5028970ba5e2fb6db91690486452392458c4f0361b4dc6f75bb24b2f984c6650c5b2dd70b9592cd68b599cf67d3f88b198ec864b0986c462d02954ba65369d4fa8546a553aa556ad57ac566b55bae576bd5fb0586c563b2596cd67b45a6d56bb65b6dd6fb85c6e573ba5d6ed77bc5e6f57bbe5f6
+fd7fc06070583c26170d87c4627158bc66371d8fc86472593ca6572d97cc667359bce6773d9fd068745a3d26974da7d46a755abd66b75dafd86c765b3da6d76db7dc6e775bbde6f77dbfe070785c3e27178dc7e472795cbe67379dcfe8747a5d3ea757add7ec767b5dbee777bddf88000300300c4700056d4700056d4b000000

@@ -130,11 +130,7 @@ def lzw_decode(data):
     print(y)
     return bytes(aux)
 
-def get_layer_data(layers, name, firstgid):
-    layer = layers[name]
-    if layer is None:
-        raise Exception("Layer: {} not found.".format(name))
-
+def get_layer_data(layer, firstgid):
     hexdata = base64.b64decode(layer.find('data').text)
     # convert to bytes (8 bits, not 32)
     data=bytes([])
@@ -142,14 +138,13 @@ def get_layer_data(layers, name, firstgid):
         j = int.from_bytes(hexdata[i:i+4], byteorder='little', signed=False)
         # shift by first tile ID
         if j!=0: j-=firstgid
-        if j>255:
+        if j<0 or j>255:
             raise Exception("tile index too large: {} at {}/{}".format(j,int(i/4)%128,int(round(i/4/128,0))))
         data += bytes([j])
     return data
 
-def export_layer(layers, name):
-    print("exporting: {}".format(name))
-    data = get_layer_data(layers, name, 1)
+def export_layer(layer):
+    data = get_layer_data(layer, 1)
     lzw = lzw_encode(data)
 
     # orig = lzw_decode(lzw)
@@ -164,9 +159,9 @@ def export_layer(layers, name):
         s += "{:02x}".format(b)
     return s
 
-def export_npcs(layers, name):
+def export_npcs(layer):
     print("exporting level metadata")
-    data = get_layer_data(layers, name, 257)
+    data = get_layer_data(layer, 257)
     x = 0
     y = 0
     s = ""
@@ -178,7 +173,7 @@ def export_npcs(layers, name):
             # x
             # y
             # angle
-            #print("found: {} at: {}/{}".format(b,x,y))
+            print("found: {} at: {}/{}".format(b,x,y))
             s += "{:02x}{:02x}{:02x}{:02x}".format(b,x,y,0)
             n += 1
         x += 1
@@ -191,13 +186,24 @@ def export_npcs(layers, name):
     return l[2:4] + l[0:2] + s
 
 level_data = xml.parse(os.path.join(local_dir,'level.tmx'))
-layers = {layer.get('name'):layer for layer in level_data.getroot().findall('./layer')}
 
-s = export_layer(layers, 'level')
-s += export_layer(layers, 'actors')
-s += export_npcs(layers, 'npcs')
+# shared across all levels 
+actors = level_data.getroot().find("./layer[@name='actors']")
+if actors is None:
+    raise Exception("Unable to find 'actors' layer.")
 
-#map_data=hexdata
-#if len(map_data)>0:
-print("__map__")
-print(re.sub("(.{256})", "\\1\n", s, 0, re.DOTALL))
+# export levels
+levels = {group.get('name'):group for group in level_data.getroot().findall("./group[@name='levels']/group")}
+print(levels)
+for i in range(len(levels)):
+    name = "level{}".format(i+1)
+    print("Exporting level: {} / {}".format(name,len(levels)))
+    # pick correct level
+    group = levels[name]
+    s = export_layer(group.find("layer[@name='level']"))
+    s += export_layer(actors)
+    s += export_npcs(group.find("layer[@name='npcs']"))
+
+    #if len(map_data)>0:
+    print("__map__")
+    print(re.sub("(.{256})", "\\1\n", s, 0, re.DOTALL))
