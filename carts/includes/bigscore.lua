@@ -1,9 +1,6 @@
 -- big score helpers
 -- credit: @Felice 
 -- https://www.lexaloffle.com/bbs/?pid=22677
-function score_add(score,n)
-  return score+shr(n,16) 
-end
 -- note: removed negative score support (??)
 function score_tostr(v)
   local s=""
