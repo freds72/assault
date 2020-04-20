@@ -114,7 +114,7 @@ end
 function make_sprite(s,sw,sh)
 	sw=sw or 8
 	sh=sh or 8
-	return {spr=s,ssx=band(s*8,127),ssy=8*flr(s/16),sw=sw,sh=sh,sx=-sw/2,sy=-sh/2}
+	return {spr=s,ssx=band(s<<3,127),ssy=8*(s\16),sw=sw,sh=sh,sx=-sw/2,sy=-sh/2}
 end
 -- attach hitmask to sprite instance
 function with_hitmask(sprite,tc)
@@ -163,8 +163,8 @@ end
 -- game globals
 local time_t=0
 local jumppads={}
--- _groups stores number of instance of actors with a given group id
-local _npcs,plyr,_groups
+-- turrets: stores number of heavy turrets
+local _npcs,plyr,_turrets
 local _map,_cells,_cells_map,_grid,_map_lru
 
 -- todo: remove for optimisation
@@ -253,7 +253,6 @@ function make_plyr(x,y,z,angle)
 		drive=function()
 			local ttl=0
 			sprite,z,dz,driving_mode,nuke_mode,dead_mode=default_sprite,0,0,true
-			-- if(not trails) make_part({sw=2.5,dsw=-0.1,ttl=6000,c=6,kind=6,trail={}},58,120) make_part({sw=2.5,dsw=-0.1,ttl=6000,c=6,kind=6,trail={}},68,120)
 		
 			return function(self)
 				-- flip?
@@ -404,7 +403,7 @@ function make_plyr(x,y,z,angle)
 			return function(self)
 				ttl-=1
 				-- todo: wait for input + message + hide sprite
-				if(ttl<0) make_blast(x,y)
+				if(ttl<0) make_part(small_blast_cls,x,y)
 			end
 		end
 	}
@@ -510,6 +509,17 @@ end
 -- particles: do not interact with actors or background
 -- bullets: interact with actors or background + can spawn particles
 local _parts,_bullets={},{}
+-- blast data
+local blast_circles={
+	{{r=8,c=7}},
+	{{r=6,c=0}},
+	{{r=5,c=2},{r=4,c=8},{r=3,c=10},{r=2,c=7}},
+	{{r=7,c=2},{r=6,c=8},{r=5,c=10},{r=4,c=7}},
+	{{r=8,c=0},{r=6,c=2},{r=5,c=9},{r=3,c=10},{r=1,c=7}},
+	{{r=8,c=0,fp=0xa5a5.ff,fn=circ}},
+	{{r=8,c=0,fp=0x5a5a.ff,fn=circ}},
+	{{r=8,c=0,fp=0x5a5a.ff,fn=circ}}
+}
 
 function update_parts(parts)
 	local px,py,pz,pangle=plyr:get_pos()
@@ -532,8 +542,8 @@ function update_parts(parts)
 			if p.side==1 and pz<=0 then
 				local x,y=x1-px,y1-py
 				-- top/left corner screen position
-				p.sx=64+shl(ca*x-sa*y,3)-p.sw/2
-				p.sy=112+shl(sa*x+ca*y,3)-p.sh/2
+				p.sx=64+((ca*x-sa*y)<<3)-p.sw/2
+				p.sy=112+((sa*x+ca*y)<<3)-p.sh/2
 				if plyr:collide(p) then
 					plyr:hit()
 					goto die
@@ -597,7 +607,7 @@ function draw_parts(parts,x0,y0,z0,angle)
 		if true then --z>0.1 then
 			local x,y,w,h=(p.x-x0)*z,(p.y-y0)*z,p.sw and max(p.sw*zw) or 0,p.sh and max(p.sh*zw) or 0
 			-- project
-			local dx,dy=64+shl(ca*x-sa*y,3),112+shl(sa*x+ca*y,3)
+			local dx,dy=64+((ca*x-sa*y)<<3),112+((sa*x+ca*y)<<3)
 			if p.draw then
 				p:draw(dx-w/2,dy-h/2,z)
 			elseif p.kind==3 then
@@ -616,6 +626,17 @@ function draw_parts(parts,x0,y0,z0,angle)
 					circfill(pt.x,pt.y,pt.sw,0x66)			
 				end
 				--fillp()
+			elseif p.kind==7 then
+				-- blast
+				palt(0,false)
+				palt(14,true)
+				local cc,r=lerpa(blast_circles,p.t/p.ttl),p.r
+				for _,c in ipairs(cc) do
+					if(c.fp) fillp(c.fp)
+					(c.fn or circfill)(dx,dy,r*c.r*zw,c.c)
+					fillp()
+				end
+				palt()		
 			else
 				sspr(p.ssx,p.ssy,p.sw,p.sh,dx-w/2,dy-h/2,w,h)
 				-- debug
@@ -680,42 +701,16 @@ local large_bullet_cls=with_hitmask({
 })
 
 -- blast
-
-local blast_circles={
-	{{r=8,c=7}},
-	{{r=6,c=0}},
-	{{r=5,c=2},{r=4,c=8},{r=3,c=10},{r=2,c=7}},
-	{{r=7,c=2},{r=6,c=8},{r=5,c=10},{r=4,c=7}},
-	{{r=8,c=0},{r=6,c=2},{r=5,c=9},{r=3,c=10},{r=1,c=7}},
-	{{r=8,c=0,fp=0xa5a5.ff,fn=circ}},
-	{{r=8,c=0,fp=0x5a5a.ff,fn=circ}},
-	{{r=8,c=0,fp=0x5a5a.ff,fn=circ}}
-   }
-
-local blast_cls={
+local small_blast_cls={
 	ttl=10,
-	draw=function(self,x,y,w)
-		palt(0,false)
-		palt(14,true)
-		local cc=lerpa(blast_circles,self.t/self.ttl)
-		for i=1,#cc do
-			local c=cc[i]
-			if(c.fp) fillp(c.fp)
-			(c.fn or circfill)(x,y,c.r*w,c.c)
-			fillp()
-		end
-		palt()
-	end,
-	update=function(self)
-		-- todo: blast crater
-		-- if(self.t==5) add(blasts,{x=x,y=y})
-		return self
-	end
+	kind=7,
+	r=1
 }
-function make_blast(x,y)
-	-- explosion part(s)
-	return make_part(blast_cls,x,y)
-end
+local large_blast_cls={
+	ttl=30,
+	kind=7,
+	r=3
+}
 
 -- nuke "particle"
 function make_nuke(x,y)
@@ -738,7 +733,7 @@ function make_nuke(x,y)
 				local cx,cy=camera(-x,-y)
 				color(0x77)
 				for r=0,r1 do
-					local x0,x1=max(rr0-r*r)^0.5,(rr1-r*r)^0.5
+					local x0,x1=sqrt(rr0-r*r),sqrt(rr1-r*r)
 					rectfill(-x0,r,-x1,r)
 					rectfill(x0,r,x1,r)
 					rectfill(-x0,-r,-x1,-r)
@@ -746,6 +741,7 @@ function make_nuke(x,y)
 				end
 				circ(0,0,r0,12)
 				fillp()
+				-- restore camera settings
 				camera(cx,cy)
 			end
 		end
@@ -770,7 +766,7 @@ end
 function decompress(mem,fn)
 	local code,code_len,code_bits={},256,8
 	for i=0,255 do
-		code[shr(i,16)]={i}
+		code[i>>16]={i}
 	end
     local buffer,buffer_bits,index,prefix=0,0,0
 
@@ -865,8 +861,8 @@ function make_npc(base,x,y)
 				ix,iy=scale*(ca*ix-sa*iy)+x1,scale*(sa*ix+ca*iy)+y1
 				if ix>14 then code=2
 				elseif ix<2 then code=1 end
-				if iy>16 then code+=8
-				elseif iy<0 then code+=4 end
+				if iy>16 then code|=8
+				elseif iy<0 then code|=4 end
 				outcode&=code
 				-- to screen space
 				g.x=ix<<3
@@ -896,7 +892,7 @@ function make_npc(base,x,y)
 			]]
 		end,
 		die=function(self)
-			make_blast(self.x,self.y)
+			make_part(small_blast_cls,self.x,self.y)
 			self.dead=true
 		end,
 		hit=function(self,dmg)
@@ -1067,6 +1063,7 @@ function make_tank(x,y)
 		acc=0.008,
 		friction=0.9,
 		side=1,
+		score=10>>16,
 		control=function(self)
 			reload_ttl-=1
 			-- idle?
@@ -1098,6 +1095,8 @@ function make_heavy_tank(x,y)
 			4,5,
 			0,5},
 		hp=10,
+		side=1,
+		score=50>>16,
 		-- co-routine data
 		seek_dly=60,
 		path={},
@@ -1127,6 +1126,8 @@ function make_msl_tank(x,y)
 			8,5,
 			4,5},
 		hp=8,
+		side=1,
+		score=50>>16,
 		-- co-routine data
 		seek_dly=60,
 		path={},
@@ -1149,9 +1150,12 @@ function make_msl_tank(x,y)
 end
 
 local heavy_turret_sprite=with_hitmask(make_sprite(76,32,24))
-function make_heavy_turret(x,y,group)
+function make_heavy_turret(x,y)
+	-- records total number of turrets
+	-- used to terminate current level
 	local toward=make_lerp_angle(0,0.1)
-	local reload_delay,reload_ttl=_groups[group]*40
+	local reload_delay,reload_ttl=_turrets*40
+	_turrets+=1
 	local turret={
 		uv={
 			2,0,
@@ -1159,7 +1163,25 @@ function make_heavy_turret(x,y,group)
 			6,3,
 			2,3},
 		hp=10,
+		side=1,
+		score=500>>16,
 		sprite=heavy_turret_sprite,
+		die=function(self)
+			_turrets-=1
+			self.dead=true
+			local x,y=self.x,self.y
+			make_part(large_blast_cls,x,y)
+			-- todo: debris sprite
+			--[[
+			do_async(function()
+				wait_async(4)
+				map_set(x,y,74)
+				map_set(x+1,y,75)
+				map_set(x,y+1,90)
+				map_set(x+1,y+1,91)
+			end)
+			]]
+		end,
 		control=function(self)
 			-- account for turret size
 			local x,y=self.x,self.y
@@ -1199,13 +1221,15 @@ function make_static_turret(x,y)
 		sh=16,
 		sw=16,
 		hp=1,
+		side=1,
+		score=10>>16,
 		draw=function()
 			-- built-in map
 		end,
 		die=function(self)
 			self.dead=true
 			local x,y=self.x,self.y
-			make_blast(x+1,y+1)
+			make_part(small_blast_cls,x+1,y+1)
 			-- todo: move to die override
 			do_async(function()
 				wait_async(4)
@@ -1389,8 +1413,8 @@ function draw_map(x,y,z,a)
 		ix,iy=scale*(ca*ix+sa*iy)+8,scale*(-sa*ix+ca*iy)+14
 		if ix>14 then outcode=2
 		elseif ix<2 then outcode=1 end
-		if iy>16 then outcode+=8
-		elseif iy<0 then outcode+=4 end
+		if iy>16 then outcode|=8
+		elseif iy<0 then outcode|=4 end
 		-- to screen space
 		g.x=ix<<3
 		g.y=iy<<3
@@ -1472,10 +1496,11 @@ end
 -->8
 -- init/update/draw/states
 function play_state()
-	local lives=3
+	local score,lives=0,3
 	-- reset
-	-- max 3 groups
-	_npcs,_parts,_bullets,_groups={},{},{},{0,0,0}
+	_npcs,_parts,_bullets,_turrets={},{},{},0
+	-- exit path
+	local exit_path={}
 
 	-- init map
 	-- collision map
@@ -1530,15 +1555,16 @@ function play_state()
 		[2]=make_tank,
 		[3]=make_tank,
 		[4]=make_tank,
-		[5]=function(x,y) make_heavy_turret(x,y,1) _groups[1]+=1  end,
-		[6]=function(x,y) make_heavy_turret(x,y,2) _groups[2]+=1 end,
-		[7]=function(x,y) make_heavy_turret(x,y,3) _groups[3]+=1 end,
+		[5]=make_heavy_turret,
 		[17]=make_msl_tank,
 		[18]=make_msl_tank,
 		[19]=make_msl_tank,
 		[20]=make_msl_tank,
-		[48]=function(x,y,a) plyr=make_plyr(x,y,8,a) end,
-		[49]=make_msl_silo
+		[48]=function(x,y,a) plyr=make_plyr(95,72,8,a) end,
+		[49]=make_msl_silo,
+		[50]=function(x,y) exit_path[1]={x,y} end,
+		[51]=function(x,y) exit_path[2]={x,y} end,
+		[52]=function(x,y) exit_path[3]={x,y} end,
 	}
 
 	local n=peek2(mem)
@@ -1566,8 +1592,8 @@ function play_state()
 			pal()
 		
 			-- draw
-			for i=1,#_npcs do
-				_npcs[i]:draw(px,py,pz,pangle)
+			for _,npc in ipairs(_npcs) do
+				npc:draw(px,py,pz,pangle)
 			end
 		
 			plyr:draw()
@@ -1584,7 +1610,7 @@ function play_state()
 			printb("SCORE",19,1,1)
 			printb("SCORE",18,0,14)
 		
-			local s=tostr(flr(time()*256))
+			local s=score_tostr(score)
 			printb(s,18,7,0)
 			printb(s,18,6,7)
 			
@@ -1608,13 +1634,18 @@ function play_state()
 		update=function()
 			cam_update()
 
-			plyr:update()
-		
+			if _turrets>0 then
+				plyr:update()
+			end
+
 			-- update actors
-			for i=#_npcs,1,-1 do
-				local npc=_npcs[i]
+			for _,npc in ipairs(_npcs) do
 				npc:update()
-				if(npc.dead) del(_npcs,npc)
+				if npc.dead then
+					--
+					if(npc.score) score+=npc.score
+					del(_npcs,npc)
+				end
 			end
 		
 			update_parts(_bullets)
