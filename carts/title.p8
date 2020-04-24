@@ -109,21 +109,17 @@ function _draw()
  	if landed then
 		if(flr(8*time())%8<4) printb("INSERT COINS",30,80,14) printb("🅾️❎",56,87,2)
 
-		printb("SCORE",19,1,1)
-		printb("SCORE",18,0,14)
+		printb("SCORE",18,0)
 
-		printb("00000",18,7,0)
-		printb("00000",18,6,7)
+		printb("00000",18,6)
 		
-		printb("HI",101,1,1)
-		printb("HI",100,0,14)
+		printb("HI",100,0)
 
 		local hi=padding(score_tostr(hi_score))
-		printb(hi,83,7,0)
-		printb(hi,82,6,7)
+		printb(hi,82,6)
 	end
  
-	printb("FREDS72",46,120,8)
+	do_printb("FREDS72",46,120,false,8)
 end
 
 __gfx__

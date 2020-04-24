@@ -51,6 +51,10 @@ function make_lerp_angle(angle,pow)
 	end
 end
 
+function make_v(a,b)
+	return {x=b.x-a.x,y=b.y-a.y}
+end
+
 -- manhattan distance (safe for overflow)
 function dist(x0,y0,x1,y1)
 	return abs(x1-x0)+abs(y1-y0)
@@ -104,6 +108,7 @@ end
 -- wait until timer
 function wait_async(t,fn)
 	for i=1,t do
+		if(fn) fn(i)
 		yield()
 	end
 end
@@ -169,6 +174,7 @@ local _map,_cells,_cells_map,_grid,_map_lru
 
 -- todo: remove for optimisation
 local gravity=-0.04
+local red_blink={0,1,2,2,8,8,8,2,2,1}
 
 -- player factory
 function make_plyr(x,y,z,angle)
@@ -187,11 +193,11 @@ function make_plyr(x,y,z,angle)
 			with_hitmask(make_sprite(130,16,16)),
 			with_hitmask(make_sprite(128,16,16))}},
 		{
-			with_hitmask(make_sprite(96,16,16)),
+			default_sprite,
 			with_hitmask(make_sprite(134,16,16)),
 			with_hitmask(make_sprite(136,16,16))
 		}
-	
+
 	-- select default
 	local sprite=default_sprite
 	
@@ -489,6 +495,9 @@ function make_plyr(x,y,z,angle)
 		hit=function()
 			-- prent
 			-- state=states.die()
+		end,
+		exit=function(self,path)
+			state=states.find_exit(self,path)
 		end,
 		update=function(self)
 			reload_ttl-=1
@@ -1151,10 +1160,10 @@ end
 
 local heavy_turret_sprite=with_hitmask(make_sprite(76,32,24))
 function make_heavy_turret(x,y)
-	-- records total number of turrets
-	-- used to terminate current level
 	local toward=make_lerp_angle(0,0.1)
 	local reload_delay,reload_ttl=_turrets*40
+	-- records total number of turrets
+	-- used to terminate current level
 	_turrets+=1
 	local turret={
 		uv={
@@ -1162,7 +1171,7 @@ function make_heavy_turret(x,y)
 			6,0,
 			6,3,
 			2,3},
-		hp=10,
+		hp=1, --debug
 		side=1,
 		score=500>>16,
 		sprite=heavy_turret_sprite,
@@ -1171,16 +1180,18 @@ function make_heavy_turret(x,y)
 			self.dead=true
 			local x,y=self.x,self.y
 			make_part(large_blast_cls,x,y)
-			-- todo: debris sprite
-			--[[
 			do_async(function()
-				wait_async(4)
-				map_set(x,y,74)
-				map_set(x+1,y,75)
-				map_set(x,y+1,90)
-				map_set(x+1,y+1,91)
+				wait_async(10)
+				-- todo: optimize for tokens
+				for i=-2,0,2 do
+					for j=-2,0,2 do
+						map_set(x+i,y+j,217)
+						map_set(x+i+1,y+j,218)
+						map_set(x+i,y+j+1,233)
+						map_set(x+i+1,y+j+1,234)
+					end
+				end
 			end)
-			]]
 		end,
 		control=function(self)
 			-- account for turret size
@@ -1495,8 +1506,34 @@ end
 
 -->8
 -- init/update/draw/states
+local _state
+
+function draw_hud(score,lives,ttl)
+	printb("SCORE",18,0)
+
+	local s=score_tostr(score)
+	printb(s,18,6)
+	
+	printb("HI",100,0)
+
+	printb("99999",82,6)
+
+	printb("TIME",54,0)
+
+	-- frames to seconds
+	local t=tostr(ttl\30)
+	printb(t,60,6)
+
+	for i=0,lives-1 do
+		spr(166,18+i*6,120)
+	end	
+end
+
 function play_state()
-	local score,lives=0,3
+	-- restore map
+	reload()
+	-- todo: time to complete from level (+ difficulty)
+	local score,lives,ttl=0,3,90*30
 	-- reset
 	_npcs,_parts,_bullets,_turrets={},{},{},0
 	-- exit path
@@ -1560,11 +1597,10 @@ function play_state()
 		[18]=make_msl_tank,
 		[19]=make_msl_tank,
 		[20]=make_msl_tank,
-		[48]=function(x,y,a) plyr=make_plyr(95,72,8,a) end,
+		[48]=function(x,y,a) plyr=make_plyr(x,y,64,a) end,
 		[49]=make_msl_silo,
-		[50]=function(x,y) exit_path[1]={x,y} end,
-		[51]=function(x,y) exit_path[2]={x,y} end,
-		[52]=function(x,y) exit_path[3]={x,y} end,
+		[50]=function(x,y) exit_path[1]={x=x,y=y} end,
+		[51]=function(x,y) exit_path[2]={x=x,y=y} end
 	}
 
 	local n=peek2(mem)
@@ -1578,19 +1614,15 @@ function play_state()
 	end
 	assert(plyr,"missing player start pos")
 
-	local red_blink={0,1,2,2,8,8,8,2,2,1}
-
 	return {
-		draw=function() 
+		draw=function()
 			local px,py,pz,pangle=plyr:get_pos()
 
-			cls()
-			clip(16,0,128-32,128)
 			-- blinking lights
 			pal(8,red_blink[flr((5.3*time())%#red_blink)+1]) 
 			draw_map(px,py,pz,pangle)
 			pal()
-		
+
 			-- draw
 			for _,npc in ipairs(_npcs) do
 				npc:draw(px,py,pz,pangle)
@@ -1603,46 +1635,26 @@ function play_state()
 			
 			--line(64,64,64+16*ca,64+16*sa,11)
 			--line(64,64,64-16*sa,64+16*ca,8)
-		
-			-- swamp green
-			pal(11,138,1)
-		
-			printb("SCORE",19,1,1)
-			printb("SCORE",18,0,14)
-		
-			local s=score_tostr(score)
-			printb(s,18,7,0)
-			printb(s,18,6,7)
-			
-			printb("HI",101,1,1)
-			printb("HI",100,0,14)
-		
-			printb("99999",83,7,0)
-			printb("99999",82,6,7)
-		
-			printb("TIME",55,1,1)
-			printb("TIME",54,0,14)
-		
-			local t=tostr(99-flr(time()))
-			printb(t,61,7,0)
-			printb(t,60,6,7)
-		
-			for i=0,lives-1 do
-				spr(166,18+i*6,120)
-			end		
+	
+			draw_hud(score,lives,ttl)
 		end,
 		update=function()
+			-- todo: loose live if timeout
+			ttl-=1
+
 			cam_update()
 
-			if _turrets>0 then
-				plyr:update()
+			if _turrets==0 then
+				_state=exit_level_state(score,lives,ttl,exit_path)
 			end
+
+			plyr:update()
 
 			-- update actors
 			for _,npc in ipairs(_npcs) do
 				npc:update()
 				if npc.dead then
-					--
+					-- any points?
 					if(npc.score) score+=npc.score
 					del(_npcs,npc)
 				end
@@ -1654,12 +1666,111 @@ function play_state()
 	}
 end
 
-local _state
+function exit_level_state(score,lives,ttl,path)
+	local sprite,fly_mode=96
+	-- clear up baddies and bullets
+	_npcs,_bullets={},{}
+	
+	local x,y,z,angle=plyr:get_pos()
+
+	-- initial target point
+	local n=make_v(path[1],path[2])
+	local d=sqrt(n.x*n.x+n.y*n.y)
+	n={x=n.x/d,y=n.y/d}
+	-- project position into line
+	local p=make_v(path[1],plyr)
+	d=p.x*n.x+p.y*n.y
+
+	local wp={x=path[1].x+d*n.x,y=path[1].y+d*n.y,next=path[2]}
+	-- exit level animation
+	do_async(function()
+		-- go to waypoint	
+		local dx,dy
+		while wp do
+			local target_angle=atan2(wp.x-x,-wp.y+y)+0.25
+			-- shortest angle
+			local dtheta=target_angle-angle
+			if dtheta>0.5 then
+				angle+=1
+			elseif dtheta<-0.5 then
+				angle-=1
+			end	
+
+			-- rotate toward
+			while(abs(angle-target_angle)>0.01) do
+				angle=lerp(angle,target_angle,0.1)
+				yield()
+			end
+			angle=target_angle
+			-- move toward
+			dx,dy=-sin(angle)*0.1,-cos(angle)*0.1
+			while(dist(x,y,wp.x,wp.y)>0.1) do
+				x+=dx
+				y+=dy
+				yield()
+			end
+
+			-- next way point
+			wp=wp.next
+		end
+
+		-- accelerate
+		wait_async(24,function()
+			x+=dx
+			y+=dy
+			dx*=1.08
+			dy*=1.08
+		end)
+		-- dive
+		sprite=215
+		wait_async(10)
+		sprite,fly_mode=247,true
+		local dz=-0.1
+		wait_async(45,function()
+			z+=dz
+			dz-=0.01
+		end)		 
+		-- back to normal
+		sprite,fly_mode=217
+		wait_async(10)
+
+		-- todo: load next cart
+		_init()		 
+	end)
+
+	return {
+		draw=function()
+			if z>-8 then
+				pal(8,red_blink[flr((5.3*time())%#red_blink)+1]) 
+				draw_map(x,y,z,angle)
+				pal()
+			end
+
+			spr(sprite,56,fly_mode and 108 or 106,2,fly_mode and 1 or 2)
+			if fly_mode and flr(time()*16)%2==0 then
+				local r=3+rnd()
+				circfill(57,110,r,10)
+				circfill(70,110,r,10)
+			end
+
+			--[[
+			if ttl<30 then
+				printb("stage 01 clear",20,63)
+			elseif ttl<60 then
+				printb("time bous",32,63)
+
+				printb("80*30 points",32,73)
+			end
+			]]
+		end,
+		update=function()
+		end
+	}
+end
+
+
 function _init()
-
-	-- todo: remove, not needed for multicart
 	_state=play_state()
-
 end
 
 function _update()
@@ -1679,10 +1790,17 @@ function _update()
 end
 
 function _draw()
+	cls()
+	-- vertical display
+	clip(16,0,128-32,128)
 
 	_state:draw()
+
 	--rectfill(0,0,127,8,1)
 	--print(stat(1).."/"..stat(7).."/"..stat(9).." "..stat(0).."kb",18,2,7)
+
+		-- swamp green
+		pal(11,138,1)
 end
 
 __gfx__
@@ -1711,12 +1829,12 @@ __gfx__
 3333333333333333000001115115555515551000dd77d77d77d77d77d77d77dd11555d533333331115d5d5d30000000015666d15111115555551111151d66671
 3333333333333333000000005511111101110000dddddddddddddddddddddddd3111153333333111115d5d330000000044556d1d5111111111111115d1d65544
 dddddddd3333333335333553dddddddd1111111111111111ddddddd1d0addddddddddddd33333111111113330000000099dd5d1dd51111111111115dd1d5dd99
-dddddd7d3333333333335675ddd77ddd111111111111111ddddddd11d00ddddddd101ddd33331111111333330000000099d75d11111111111111111111d57d99
-ddddd77d333533333333d565ddd77ddd11111111111111ddddddd111da0dddddddd101dd333311111333333300000000aa7d5dddddddd111111dddddddd5d7aa
-dddd7d7d33d7633336333d5dddd77ddd1111111111111ddddddd1111daaddddddddd101d33333113333333330000000044556555666612244221666655565544
-dddd7d7d333d3333576333d3ddd77ddd111111111111ddddddd11111d0addddddddd101d3333333333333333000000001566567d5661241441421665d7656651
-ddddd77d33333333d5333333ddd77ddd11111111111ddddddd111111d00dddddddd101dd33333333333333330000000015665577511244244244211577556671
-dddddd7d5633335333336733ddd77ddd1111111111ddddddd1111111da0ddddddd101ddd3333333333333333000000001555499a4551221221221554a9945571
+dddddd7d3333333333335675ddd77ddd111111111111111ddddddd11d00ddddddd282ddd33331111111333330000000099d75d11111111111111111111d57d99
+ddddd77d333533333333d565ddd77ddd11111111111111ddddddd111da0dddddddd282dd333311111333333300000000aa7d5dddddddd111111dddddddd5d7aa
+dddd7d7d33d7633336333d5dddd77ddd1111111111111ddddddd1111daaddddddddd282d33333113333333330000000044556555666612244221666655565544
+dddd7d7d333d3333576333d3ddd77ddd111111111111ddddddd11111d0addddddddd282d3333333333333333000000001566567d5661241441421665d7656651
+ddddd77d33333333d5333333ddd77ddd11111111111ddddddd111111d00dddddddd282dd33333333333333330000000015665577511244244244211577556671
+dddddd7d5633335333336733ddd77ddd1111111111ddddddd1111111da0ddddddd282ddd3333333333333333000000001555499a4551221221221554a9945571
 dddddddd3533333333535d33dddddddd111111111ddddddd11111111daaddddddddddddd3333333333333333000000001111499a4112442442442114a9941111
 0000000000000000000000000066000000000000d555d50000007777700000000888880000000000333333333333333300000000000000000000000000000000
 0000000000000000002222000d55d00000000000d56d6d0000007000700000000088800000000000333033003030333300000000000000000000000000000000
@@ -1790,27 +1908,27 @@ dddddddd3533333333535d33dddddddd111111111ddddddd11111111daaddddddddddddd33333333
 3111151557d66533000028666667661005667d6667692000128949497a9aa999a499a9910000000033333333333333333334344335dddddddddddd6333433333
 331111111dd65333000028656567661005667d6667692000128999997a945999a499a910000000003333333333333333344433335dddddddddddddd633444433
 333111110d6533330000116161666d100d66d16666dd10001124446666410444d144410000000000333333333333333334433335dddddddddddddddd63344433
-0000000033333dddddddddddddd3333300000000000000000000000000000000000000000000000000000000000000003333435ddd8dddddddddd8ddd6334443
-000000003333d55555555555555d33330000000000000000000550000000000000000000000000000000000000000000344335ddd88dddddddddd88ddd633443
-00110000333d566b66666666b665d333000000000000000000005000000000000000000000000000000000000000000034435ddd888dddddddddd888ddd63333
-0011000033d566bb6b66b6b6bb665d3300000000005500000000005000000000000000000000000000000000000000003335dddddddddd8dd8dddddddddd6333
-000001003d566bbbbbb6bb66bbb665d30550000005555000005500500000000000000000000000000000000000000000335dddddddddd88d688dddddddddd633
-00001100d56666bbbbbbbbbbbb66665d5555000000055000005500000000090d6090000000000000000000000000000035dddddddddd888d6888dddddddddd63
-01000000d56b66bbbbbbbbbbbb66b65d5555000000050000000000000000969289690000000000d88d000000000000005dddddddddd8888678888dddddddddd6
-00000000d56bbbbbbbbbbbbbbbbbb65d0550000000000000000000000000d595d95d000000006d95d9d60000000000001dd67ddddddddd688766dddddddd67d6
-bbbbbbbbd566bbbbbbbbbbbbbbbbb65ddddddddd79977997dddddddd000fd546645df0000004989679899000000000001d5d6ddddddd55d886ddddddddd5d6d6
-b66bbbbbd56bbbbbbbbbbbbbbbb6665ddddddddd77997799dddddddd00096d49f9d69000000542249224d000000000001d55ddddddd8888d68888dddddd55dd5
-b66bb6bbd56bbbbbbbbbbbbbbbbb665ddddddddddddddddddddddddd00049f0490f9400000005502205500000000000031dddddddddd8885d888dddddddddd53
-bbbbb66bd56bbbbbbbbbbbbbbbbbb65dddddddddddddddddd777777d0005480000845000000000000000000000000000331dddddddddd885d88dddddddddd533
-bbbbbbbbd566bbbbbbbbbbbbbbbb665dddddddddddddddddd777777d00005500005500000000000000000000000000003331dddddddddd8dd8dddddddddd5333
-bb66bbbbd566bbbbbbbbbbbbbbb6b65ddddddddddddddddddddddddd000000000000000000000000000000000000000033331ddd888dddddddddd888ddd53333
-bb66bbbbd56bbbbbbbbbbbbbbbb6665d99779977dddddddddddddddd0000000000000000000000000000000000000000334331ddd88dddddddddd88ddd533443
-bbbbbbbbd56bbbbbbbbbbbbbbbbbb65d79977997dddddddddddddddd00000000000000000000000000000000000000003443331ddd8dddddddddd8ddd5334344
-00000000d56bbbbbbbbbbbbbbbbbb65ddddddd9777dddddd00000000000000000000000000000000000000000000000034443331dddddddddddddddd53444444
-00000000d56b66bbbbbbbbbbbb66b65ddddddd9997dddddd000000000000000000000000000000000000000000000000334333331dddddddddddddd533443433
-04044400d56666bbbbbbbbbbbb66665ddddddd7999dddddd0000000000000000000000000000000000000000000000003333333331dddddddddddd5334433333
-0f4fff403d566bbbbbbbbbbbbbb665d3dddddd7779dddddd00000000000000000000000000000000000000000000000033334433331dddddddddd53334433333
-072777f033d566bbbb66bbb6bb665d33dddddd9777dddddd000000000000000000000000000000000000000000000000333344333331ddd67ddd533344433333
+0000000033333dddddddddddddd3333300000000000000000000000000000000000000000005ddd100088d82000000003333435ddd8dddddddddd8ddd6334443
+000000003333d55555555555555d333300000000000000000005500000000000000000000028dddd5004dddd00000000344335ddd88dddddddddd88ddd633443
+00110000333d566b66666666b665d33300000000000000000000500000000000000000000dd2821d2005a8d80000000034435ddd888dddddddddd888ddd63333
+0011000033d566bb6b66b6b6bb665d33000000000055000000000050000000000000000094ddd1ddd5004dd5000000003335dddddddddd8dd8dddddddddd6333
+000001003d566bbbbbb6bb66bbb665d305500000055550000055005000000000000000005d28dd42dd5d1dd200000000335dddddddddd88d688dddddddddd633
+00001100d56666bbbbbbbbbbbb66665d5555000000055000005500000000090d60900000dd82d4d65d5dddd80000000035dddddddddd888d6888dddddddddd63
+01000000d56b66bbbbbbbbbbbb66b65d55550000000500000000000000009692896900005ddd085dddd5d1d0000000005dddddddddd8888678888dddddddddd6
+00000000d56bbbbbbbbbbbbbbbbbb65d0550000000000000000000000000d595d95d00008ddd01885d526600000000001dd67ddddddddd688766dddddddd67d6
+bbbbbbbbd566bbbbbbbbbbbbbbbbb65ddddddddd79977997dddddddd000fd546645df00025ddd1282d051560000000001d5d6ddddddd55d886ddddddddd5d6d6
+b66bbbbbd56bbbbbbbbbbbbbbbb6665ddddddddd77997799dddddddd00096d49f9d690005ddddd11ddd0011d000000001d55ddddddd8888d68888dddddd55dd5
+b66bb6bbd56bbbbbbbbbbbbbbbbb665ddddddddddddddddddddddddd00049f0490f94000ddd56ddd126dd00d0000000031dddddddddd8885d888dddddddddd53
+bbbbb66bd56bbbbbbbbbbbbbbbbbb65dddddddddddddddddd777777d0005480000845000ddd1d66d28d5dd8500000000331dddddddddd885d88dddddddddd533
+bbbbbbbbd566bbbbbbbbbbbbbbbb665dddddddddddddddddd777777d00005500005500008ddd1dd66881dd52000000003331dddddddddd8dd8dddddddddd5333
+bb66bbbbd566bbbbbbbbbbbbbbb6b65ddddddddddddddddddddddddd000000000000000004dd011dd18dd4200000000033331ddd888dddddddddd888ddd53333
+bb66bbbbd56bbbbbbbbbbbbbbbb6665d99779977dddddddddddddddd000000000000000000dd4000182d4d0000000000334331ddd88dddddddddd88ddd533443
+bbbbbbbbd56bbbbbbbbbbbbbbbbbb65d79977997dddddddddddddddd0000000000000000000da000221d8000000000003443331ddd8dddddddddd8ddd5334344
+00000000d56bbbbbbbbbbbbbbbbbb65ddddddd9777dddddd00000000000000d88d00000000000000000000000000000034443331dddddddddddddddd53444444
+00000000d56b66bbbbbbbbbbbb66b65ddddddd9997dddddd0000000000006d95d9d60000000000000000000000000000334333331dddddddddddddd533443433
+04044400d56666bbbbbbbbbbbb66665ddddddd7999dddddd0000000000049896798990000000000000000000000000003333333331dddddddddddd5334433333
+0f4fff403d566bbbbbbbbbbbbbb665d3dddddd7779dddddd00000000000542249224d00000000000000000000000000033334433331dddddddddd53334433333
+072777f033d566bbbb66bbb6bb665d33dddddd9777dddddd000000000000550220550000000000000000000000000000333344333331ddd67ddd533344433333
 0f0fff00333d566b66666666b665d333dddddd9997dddddd0000000000000000000000000000000000000000000000003333333333331d5d6dd5344333333333
 000000003333d55555555555555d3333dddddd7999dddddd0000000000000000000000000000000000000000000000003333333333333155dd53444333333333
 0000000033333dddddddddddddd33333dddddd7779dddddd00000000000000000000000000000000000000000000000033333333333333111533333333333333
@@ -1946,7 +2064,7 @@ __label__
 
 __gff__
 00000303030000000000000001010101c10103000300000000000000010101010101030303000000030001000101a1010002020000000000000000000101010100000000000000000000020200000000000000000000000000000202000000000000000000000000000303030000000000000000000000000003030300000000
-0000000000000000000003030202000000000000000000000000030302020000000000000002000000000000000001010303000000000000000000000000010103030000000000000000000000000000000000000000000000000000000000000000080000000000000000000000040000000000000000000000000000000000
+0000000000000000000003030202000000000000000000000000030302020000000000000002000000000000000001010303000000000000000000000000010103030000000000000000000000000000000000000000000000020200000000000000080000000000000202000000040000000000000000000000000000000000
 __map__
 ed0800804060503824160d0784426150b864361d0f8844625138a4562d178c46622d08e476350d8ec86452390c7e32d00100e5403024724d08944ae65339a4aa5b2f8aca182ac9e2b1812c684e2093a9ed168d479e3026f42884e8274fa82a82941a64029d50ac566b550a5552ab308e809835b09d763d0ab3c264362b25b6b5
 52af57e0b319558edb3f95d2ee7299b5c60774badb86232188c40350c1e129f70b941a88ac56dba9f45aedee7749bd40b1f90c96270a0100e246432c5d4f1b43b664a9ed169349a75ccc802afb0bf6ceb3831884f0fbad1ef77dbdc3e334f9a09567775a68b81c4e2706bc2770915b34158b3586ed5ad16e775a2dfefb0dc2e1
@@ -1967,4 +2085,5 @@ bb5479b340ebbce1520acebf0580b41702fd8a01b6f6dfdc001d5e6c9b50ce98ea1b538c15e84aec
 83b0f62826e61cc7990277298554ede56fb68efa9aab0b80efde70e6c56f6c6dadb9b18b7400d11790b8f39e41acd63deec077b8b47412b20941a6f4dec1d413992ea5062d8270c1edf4c3e2e6abd7d8960fbb49c7b45c1bd5d9bb776fecf0c33aef0a4bcff3a92e6f893630f77ef9ddd6741941bd74f0f83c297b2b8dd5f09e
 249076dec1e23c578f2d048fc8793f29e57cb797f31e67cd79bf39e77cf79ff41e87d17a3f49e97d37a7f51ea7d57abf59eb7d77aff61ec7d97b3f69ed7db7b7f71ee7dd7bbf79ef7df7bff81f07e17c3f89f17e37c7f91f27e57cbf99f37e77cffa1f47e97d3fa9f57eb7d7fb0498ff0040209309a4e27a8142a200426150b8
 64361d0f8844625138a4562a5028970ba5e2fb6db91690486452392458c4f0361b4dc6f75bb24b2f984c6650c5b2dd70b9592cd68b599cf67d3f88b198ec864b0986c462d02954ba65369d4fa8546a553aa556ad57ac566b55bae576bd5fb0586c563b2596cd67b45a6d56bb65b6dd6fb85c6e573ba5d6ed77bc5e6f57bbe5f6
-fd7fc06070583c26170d87c4627158bc66371d8fc86472593ca6572d97cc667359bce6773d9fd068745a3d26974da7d46a755abd66b75dafd86c765b3da6d76db7dc6e775bbde6f77dbfe070785c3e27178dc7e472795cbe67379dcfe8747a5d3ea757add7ec767b5dbee777bddf88000300300c4700056d4700056d4b000000
+fd7fc06070583c26170d87c4627158bc66371d8fc86472593ca6572d97cc667359bce6773d9fd068745a3d26974da7d46a755abd66b75dafd86c765b3da6d76db7dc6e775bbde6f77dbfe070785c3e27178dc7e472795cbe67379dcfe8747a5d3ea757add7ec767b5dbee777bddf88000500300c4700056d4700325549003373
+4900056d4b00
