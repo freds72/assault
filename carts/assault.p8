@@ -1,5 +1,5 @@
 pico-8 cartridge // http://www.pico-8.com
-version 19
+version 23
 __lua__
 -- assault
 -- by @freds72
@@ -30,9 +30,9 @@ end
 function lerpa(a,t)
 	return a[flr(#a*t)+1]
 end
--- pick a random elt from an array
-function pick(a)
-	return lerpa(a,rnd())
+-- pick the next item in a table based on time
+function picknext(a,spd)
+	return a[flr(30*time()*spd)%#a+1]
 end
 
 -- return shortest angle to target
@@ -176,6 +176,12 @@ local _map,_cells,_cells_map,_grid,_map_lru
 local gravity=-0.04
 local red_blink={0,1,2,2,8,8,8,2,2,1}
 
+-- actors mapr
+local _npc_map={}
+function to_npc_map(x,y)
+	return x\2|(y\2)<<6
+end
+
 -- player factory
 function make_plyr(x,y,z,angle)
 	local reload_ttl,reload_nuke_ttl,acc,da,dz,mortar_angle,underwater=0,0,0,0,0,0
@@ -232,6 +238,7 @@ function make_plyr(x,y,z,angle)
 		if btn(5) and reload_ttl<0 then
 			make_bullet(bullet_cls,x,y,0,-sa/2,-ca/2)
 			reload_ttl=10
+			sfx(0)
 		end
 	end
 
@@ -242,8 +249,8 @@ function make_plyr(x,y,z,angle)
 			local ca,sa=cm*cos(angle),cm*sin(angle)
 			make_part(nuke_shell_cls,x,y,z,-sa,-ca,sm)
 			-- next nuke
-			reload_nuke_ttl=15
-
+			reload_nuke_ttl=120
+			sfx(4)
 			-- marker
 			local a,b,c=gravity/2,sm,z
 			local d=b*b-4*a*c
@@ -392,6 +399,7 @@ function make_plyr(x,y,z,angle)
 				z+=dz
 				dz+=gravity
 				if z<0 then
+					sfx(1)
 					bounces-=1
 					z=0
 					if bounces>0 then
@@ -438,14 +446,14 @@ function make_plyr(x,y,z,angle)
 			if driving_mode then
 				if(underwater) pal(5,6)
 				if lthread_acc>0 then
-					spr(dust_sprites[flr(time_t/4)%3+1],66,119,1,1,false,true)
+					spr(picknext(dust_sprites,0.25),66,119,1,1,false,true)
 				elseif lthread_acc<0 then
-					spr(dust_sprites[flr(time_t/4)%3+1],66,104)
+					spr(picknext(dust_sprites,0.25),66,104)
 				end
 				if rthread_acc>0 then
-					spr(dust_sprites[flr(time_t/4+1)%3+1],54,119,1,1,true,true)
+					spr(picknext(dust_sprites,0.25),54,119,1,1,true,true)
 				elseif rthread_acc<0 then
-					spr(dust_sprites[flr(time_t/4+1)%3+1],54,104,1,1,true)
+					spr(picknext(dust_sprites,0.25),54,104,1,1,true)
 				end
 				if(underwater) pal()
 			end
@@ -502,13 +510,22 @@ function make_plyr(x,y,z,angle)
 		update=function(self)
 			reload_ttl-=1
 			reload_nuke_ttl-=1
+
+			-- free up previous pos
+			_npc_map[to_npc_map(self.x,self.y)]=nil
+			
 			state(self)
+	
 			-- export current hitmask
 			self.hitmask=sprite.hitmask
 
 			-- "export" public variables
 			self.x=x
 			self.y=y
+	
+		  --
+		  _npc_map[to_npc_map(self.x,self.y)]=true
+
 			-- kill "ghost" rotation
 			if(abs(da)<0.001) da=0
 		end
@@ -673,6 +690,7 @@ function make_part(base_cls,x,y,z,dx,dy,dz)
 	},{__index=base_cls})
 	_parts[_next_part]=p
 	_next_part=(_next_part+1)%1024
+	if(p.sfx) sfx(p.sfx)
 	return p
 end
 
@@ -713,7 +731,8 @@ local large_bullet_cls=with_hitmask({
 local small_blast_cls={
 	ttl=10,
 	kind=7,
-	r=1
+	r=1,
+	sfx=2
 }
 local large_blast_cls={
 	ttl=30,
@@ -723,6 +742,7 @@ local large_blast_cls={
 
 -- nuke "particle"
 function make_nuke(x,y)
+	sfx(3)
 	local r0,r1,fp,t=8,8,#dither_pat,0
 	-- nuke always at floor level
 	return make_part({
@@ -784,7 +804,7 @@ function decompress(mem,fn)
     while index < len or buffer_bits >= code_bits do
         -- read buffer
 		while index < len and buffer_bits < code_bits do
-			buffer=buffer<<8|peek(mem)>>16
+			buffer=buffer<<8|@mem>>16
       buffer_bits+=8
 			index+=1
 			mem+=1
@@ -792,7 +812,7 @@ function decompress(mem,fn)
     -- find word
     buffer_bits-=code_bits
     local key=buffer>>buffer_bits
-		buffer=band(buffer,(0x0.0001<<buffer_bits)-0x0.0001)
+		buffer&=(0x0.0001<<buffer_bits)-0x0.0001
 		local word=code[key]
 		if(not word) word=array_add(prefix, prefix[1])
 
@@ -819,17 +839,17 @@ function decompress(mem,fn)
 end
 
 -->8
--- npc 
-local _npc_map={}
-function is_npc(x,y)
-	return _npc_map[flr(x)|flr(y)>>7]
-end
+-- npc
 function solid_npc(a,dx,dy)
 	local x,y,w,h=a.x+dx,a.y+dy,a.w,a.h
-	return is_npc(x-w,y-h) or is_npc(x+w,y-h) or is_npc(x-w,y+h) or is_npc(x+w,y+h)
+	return 
+		_npc_map[to_npc_map(x-w,y-h)] or 
+		_npc_map[to_npc_map(x+w,y-h)] or 
+		_npc_map[to_npc_map(x-w,y+h)] or 
+		_npc_map[to_npc_map(x+w,y+h)]
 end
 
-function make_npc(base,x,y)
+function make_npc(base,x,y,name)
 	local angle,acc,hit_t=0,0,0
 
 	-- quad
@@ -915,14 +935,18 @@ function make_npc(base,x,y)
 		end,
 		update=function(self)
 			hit_t-=1
-			-- prev pos
-			_npc_map[flr(self.x)|flr(self.y)>>7]=nil
 
 			local move,target_angle=self:control()
 			if target_angle then
 				angle=target_angle
 			end
-			if false then --move then
+			if move then
+				assert(self.w,"invalid w for:"..name)
+				assert(self.h,"invalid w for:"..name)
+
+				-- prev pos
+				_npc_map[to_npc_map(self.x,self.y)]=nil
+
 				acc+=self.acc
 				local dx,dy=acc*cos(angle),-acc*sin(angle)
 
@@ -941,7 +965,7 @@ function make_npc(base,x,y)
 				else
 					acc=0
 				end
-				_npc_map[flr(self.x)|flr(self.y)>>7]=true
+				_npc_map[to_npc_map(self.x,self.y)]=true
 
 				-- friction
 				acc*=self.friction
@@ -1012,7 +1036,7 @@ function make_tank(x,y)
 
 			return function()
 				ttl-=1
-				if(ttl<0) state=pick(states)(self)
+				if(ttl<0) state=rnd(states)(self)
 				angle=lerp(angle,target_angle,0.1)
 				--self.state=think.."\n"..angle.."\n"..target_angle
 				return false,angle
@@ -1023,7 +1047,7 @@ function make_tank(x,y)
 			local ttl=10+rnd(10)
 			return function()
 				ttl-=1
-				if(ttl<0) state=pick(states)(self)
+				if(ttl<0) state=rnd(states)(self)
 				return true,angle
 			end
 		end,
@@ -1032,7 +1056,7 @@ function make_tank(x,y)
 			local ttl=5+rnd(10)
 			return function()
 				ttl-=1
-				if(ttl<0) state=pick(states)(self)
+				if(ttl<0) state=rnd(states)(self)
 				return false,angle
 			end
 		end,
@@ -1054,14 +1078,14 @@ function make_tank(x,y)
 						fire_bullet(self)
 					end
 				end
-				state=pick(states)(self)
+				state=rnd(states)(self)
 			end
 		end
 	}
 
 	local tank={
-		w=0.8,
-		h=0.8,
+		w=0.4,
+		h=0.4,
 		sprite=light_tank_sprite,
 		uv={
 			0,0,
@@ -1077,13 +1101,13 @@ function make_tank(x,y)
 			reload_ttl-=1
 			-- idle?
 			if not state and dist(self.x,self.y,plyr.x,plyr.y)<20 then
-				state,reload_ttl=pick(states)(self),30
+				state,reload_ttl=rnd(states)(self),30
 			end
 			if(state) return state(self)
 		end
 	}
 
-	return make_npc(tank,x,y)
+	return make_npc(tank,x,y,"tank")
 end
 
 local heavy_tank_sprite=with_hitmask(make_sprite(182,32,16))
@@ -1104,6 +1128,7 @@ function make_heavy_tank(x,y)
 			4,5,
 			0,5},
 		hp=10,
+		acc=0.002,
 		side=1,
 		score=50>>16,
 		-- co-routine data
@@ -1114,7 +1139,7 @@ function make_heavy_tank(x,y)
 		end
 	}
 
-	return make_npc(tank,x,y)
+	return make_npc(tank,x,y,"heavy tk")
 end
 
 local msl_tank_sprite=with_hitmask(make_sprite(178,32,16))
@@ -1147,7 +1172,7 @@ function make_msl_tank(x,y)
 				do_async(function()
 					for i=1,4 do
 						wait_async(5)
-						make_homing_msl(self.x,self.y,0)
+						-- make_homing_msl(self.x,self.y,0)
 					end
 				end)
 			end
@@ -1155,7 +1180,7 @@ function make_msl_tank(x,y)
 		end
 	}
 
-	return make_npc(tank,x,y)
+	return make_npc(tank,x,y,"msl tk")
 end
 
 local heavy_turret_sprite=with_hitmask(make_sprite(76,32,24))
@@ -1203,7 +1228,7 @@ function make_heavy_turret(x,y)
 				reload_ttl=reload_delay
 			end
 			-- not active
-			if(not reload_ttl) return angle
+			if(not reload_ttl) return false,angle
 
 			reload_ttl-=1
 			if reload_ttl<0 then
@@ -1223,7 +1248,7 @@ function make_heavy_turret(x,y)
 			return false,angle
 		end
 	}
-	return make_npc(turret,x,y)
+	return make_npc(turret,x,y,"heavy turret")
 end
 
 function make_static_turret(x,y)
@@ -1276,7 +1301,7 @@ function make_static_turret(x,y)
 			end
 		end
 	}
-	return make_npc(turret,x,y)
+	return make_npc(turret,x,y,"turret")
 end
 
 -- hidden missile silo
@@ -1304,22 +1329,24 @@ function make_msl_silo(x,y)
 					-- fire msl
 					make_msl(self.x+0.5,self.y+0.5)
 					-- debug
-					--hidden=true
+					-- hidden=true
 				end)
 			end
 		end
 	}
-	return make_npc(turret,x,y)
+	return make_npc(turret,x,y,"silo")
 end
 
 -- missile
 function make_msl(x,y)
 	-- get direction
-	local ttl,angle=0,atan2(plyr.x-x+0.5,-plyr.y+y+0.5)
+	local ttl,dz,angle=0,0.1,atan2(plyr.x-x+0.5,-plyr.y+y+0.5)
 
 	local msl={
 		sw=8,
 		sh=8,
+		w=0.4,
+		h=0.4,
 		acc=0.2,
 		friction=1,
 		collide=function() end,
@@ -1338,7 +1365,7 @@ function make_msl(x,y)
 			return true,angle 
 		end
 	}
-	return make_npc(msl,x,y)
+	return make_npc(msl,x,y,"msl")
 end
 
 function make_homing_msl(x,y,angle)
@@ -1369,7 +1396,7 @@ function make_homing_msl(x,y,angle)
 			return true,angle 
 		end
 	}
-	return make_npc(msl,x,y)
+	return make_npc(msl,x,y,"homing msl")
 end
 
 -->8
@@ -1378,12 +1405,12 @@ end
 
 -- check for the given tile flag
 function fmget(x,y)
-	return fget(_map[flr(x)|flr(y)<<7])
+	return fget(_map[(x\1)|(y\1)<<7])
 end
 -- return true if solid tile for a bullet
 -- 0x1 + 0x2
 function bullet_solid(x,y)
-	return band(fget(_map[flr(x)|flr(y)<<7]),3)==3
+	return band(fget(_map[(x\1)|(y\1)<<7]),3)==3
 end
 
 function get_area(a,dx,dy)
@@ -1478,7 +1505,7 @@ function draw_map(x,y,z,a)
 		-- add/reuse cache entry
 		_map_lru[mini]={k=k,t=time_t}
 		-- fill cache entry
-		local mem=0x2000+mini*32
+		local mem=0x2000+(mini<<5)
 		for base,v in pairs(_cells_map[k]) do
 			poke4(mem+base,v)
 		end
@@ -1565,7 +1592,7 @@ function play_state()
 
 	local mem=decompress(0x2000,function(s,i,j)
 		if fget(s,2) then
-			jumppads[i+128*j]=3
+			jumppads[i|j<<7]=3
 		end
 		-- turrets: encoded in the last 4 bits
 		local f=band(fget(s),0xf0)
@@ -1581,10 +1608,10 @@ function play_state()
 	-- avoid overwriting ram while reading..
 	local tmp={}
 	mem=decompress(mem,function(s,i,j)
-		if(s!=0) add(tmp,{i=i,j=j,s=s})
+		if(s!=0) add(tmp,function() mset(i,j,s) end)
 	end)
 	for _,t in pairs(tmp) do
-		mset(t.i,t.j,t.s)
+		t()
 	end
 
 	local actor_factory={
@@ -1619,7 +1646,7 @@ function play_state()
 			local px,py,pz,pangle=plyr:get_pos()
 
 			-- blinking lights
-			pal(8,red_blink[flr((5.3*time())%#red_blink)+1]) 
+			pal(8,picknext(red_blink,5.3)) 
 			draw_map(px,py,pz,pangle)
 			pal()
 
@@ -1741,7 +1768,7 @@ function exit_level_state(score,lives,ttl,path)
 	return {
 		draw=function()
 			if z>-8 then
-				pal(8,red_blink[flr((5.3*time())%#red_blink)+1]) 
+				pal(8,picknext(red_blink,5.3)) 
 				draw_map(x,y,z,angle)
 				pal()
 			end
@@ -1770,6 +1797,8 @@ end
 
 
 function _init()
+	poke(0x5f38,128)
+	poke(0x5f39,128)
 	_state=play_state()
 end
 
@@ -1796,11 +1825,8 @@ function _draw()
 
 	_state:draw()
 
-	--rectfill(0,0,127,8,1)
-	--print(stat(1).."/"..stat(7).."/"..stat(9).." "..stat(0).."kb",18,2,7)
-
-		-- swamp green
-		pal(11,138,1)
+	-- swamp green
+	pal(11,138,1)
 end
 
 __gfx__
@@ -2085,5 +2111,12 @@ bb5479b340ebbce1520acebf0580b41702fd8a01b6f6dfdc001d5e6c9b50ce98ea1b538c15e84aec
 83b0f62826e61cc7990277298554ede56fb68efa9aab0b80efde70e6c56f6c6dadb9b18b7400d11790b8f39e41acd63deec077b8b47412b20941a6f4dec1d413992ea5062d8270c1edf4c3e2e6abd7d8960fbb49c7b45c1bd5d9bb776fecf0c33aef0a4bcff3a92e6f893630f77ef9ddd6741941bd74f0f83c297b2b8dd5f09e
 249076dec1e23c578f2d048fc8793f29e57cb797f31e67cd79bf39e77cf79ff41e87d17a3f49e97d37a7f51ea7d57abf59eb7d77aff61ec7d97b3f69ed7db7b7f71ee7dd7bbf79ef7df7bff81f07e17c3f89f17e37c7f91f27e57cbf99f37e77cffa1f47e97d3fa9f57eb7d7fb0498ff0040209309a4e27a8142a200426150b8
 64361d0f8844625138a4562a5028970ba5e2fb6db91690486452392458c4f0361b4dc6f75bb24b2f984c6650c5b2dd70b9592cd68b599cf67d3f88b198ec864b0986c462d02954ba65369d4fa8546a553aa556ad57ac566b55bae576bd5fb0586c563b2596cd67b45a6d56bb65b6dd6fb85c6e573ba5d6ed77bc5e6f57bbe5f6
-fd7fc06070583c26170d87c4627158bc66371d8fc86472593ca6572d97cc667359bce6773d9fd068745a3d26974da7d46a755abd66b75dafd86c765b3da6d76db7dc6e775bbde6f77dbfe070785c3e27178dc7e472795cbe67379dcfe8747a5d3ea757add7ec767b5dbee777bddf88000500300c4700056d4700325549003373
-4900056d4b00
+fd7fc06070583c26170d87c4627158bc66371d8fc86472593ca6572d97cc667359bce6773d9fd068745a3d26974da7d46a755abd66b75dafd86c765b3da6d76db7dc6e775bbde6f77dbfe070785c3e27178dc7e472795cbe67379dcfe8747a5d3ea757add7ec767b5dbee777bddf8800390011090c0001480d0001420e00014e
+0e0001481100014d1100114f1100014112001154130031571300015e1300014814000149140001591400014e15000142160001471600015c160001581700015c1800315e190001591a00110a1d00110e2000010b2300010d2400010a260001402600010d27000143270001482700013e2800010a2a0001102b0001432b000145
+2f003120310001493100310933003124330001183400310a3600011436000115370001193700011238003109390001223f0001273f0001344100112f420001334500300c4700056d47003255490033734900056d4b00000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+__sfx__
+000100002b52329543265532555323551215511f5511c5511955118551165511455113541105410d5310b52108521075210551103511025110151102400023000130003400024000140001400024000240001400
+0002000006743097530a7530975303743017210060102600006000060000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000300000c343236450933520621063311b6210432116611023210f611013110a6110361104600036000260001600016000460003600026000160001600016000160004600036000260001600016000160001600
+001000000835307343053330332301313063030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0003000032554305442e5402c5402a5302853025530225301f5301d5201a52018520155201452012520115200f5200d5200c5200c5200a5200952007520065200552004520025250151500515025000150000000

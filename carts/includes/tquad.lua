@@ -1,7 +1,8 @@
 -- quad rasterization with tline uv coordinates
 function tquad(v,uv)
-	local p0,nodes=v[4],{}
+	local p0,spans=v[4],{}
 	local x0,y0,u0,v0=p0.x,p0.y,uv[7],uv[8]
+	-- ipairs is slower for small arrays
 	for i=1,4 do
 		local p1=v[i]
 		local x1,y1,u1,v1=p1.x,p1.y,uv[i*2-1],uv[i*2]
@@ -17,17 +18,16 @@ function tquad(v,uv)
 		u0+=sy*du
 		v0+=sy*dv
 		for y=cy0,min(ceil(y1)-1,127) do
-			local x=nodes[y]
-			if x then
+			local span=spans[y]
+			if span then
 				--rectfill(x[1],y,x0,y,offset/16)
 				
-				local a,au,av,b,bu,bv=x.x,x.u,x.v,x0,u0,v0
+				local a,au,av,b,bu,bv=span.x,span.u,span.v,x0,u0,v0
 				if(a>b) a,au,av,b,bu,bv=b,bu,bv,a,au,av
-				local ca,cb=ceil(a),ceil(b)-1
-				--assert(ca<=ceil(b)-1,a.."/"..b)
+				local dab=b-a
+				local dau,dav=(bu-au)/dab,(bv-av)/dab
+				local ca,cb=ceil(a),min(ceil(b)-1,127)
 				if ca<=cb then
-					local dab=b-a
-					local dau,dav=(bu-au)/dab,(bv-av)/dab
 					-- sub-pix shift
 					local sa=ca-a
 					au+=sa*dau
@@ -35,7 +35,7 @@ function tquad(v,uv)
 					tline(ca,y,cb,y,au,av,dau,dav)
 				end
 			else
-				nodes[y]={x=x0,u=u0,v=v0}
+				spans[y]={x=x0,u=u0,v=v0}
 			end
 			x0+=dx
 			u0+=du
@@ -43,6 +43,7 @@ function tquad(v,uv)
 		end
 		x0,y0,u0,v0=_x1,_y1,_u1,_v1
 	end
+
 	--[[
 	local v0,v1,v2,v3=
 		v[1],
