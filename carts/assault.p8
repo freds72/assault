@@ -169,7 +169,7 @@ end
 local time_t=0
 local jumppads={}
 -- turrets: stores number of heavy turrets
-local _npcs,plyr,_turrets
+local _npcs,plyr,_turrets,_blasts,_npc_map
 local _map,_cells,_cells_map,_grid,_map_lru
 
 -- todo: remove for optimisation
@@ -177,7 +177,6 @@ local gravity=-0.04
 local red_blink={0,1,2,2,8,8,8,2,2,1}
 
 -- actors mapr
-local _npc_map={}
 function to_npc_map(x,y)
 	return x\2|(y\2)<<6
 end
@@ -849,8 +848,8 @@ function solid_npc(a,dx,dy)
 		_npc_map[to_npc_map(x+w,y+h)]
 end
 
-function make_npc(base,x,y,name)
-	local angle,acc,hit_t=0,0,0
+function make_npc(base,x,y,angle,name)
+	local acc,hit_t=0,0
 
 	-- quad
 	-- texspace -> world space
@@ -867,7 +866,7 @@ function make_npc(base,x,y,name)
 		{x=0,y=0,ix=-w,iy=h}
 	}
 
-	return add(_npcs,setmetatable(base,{
+	return add(base.array or _npcs,setmetatable(base,{
 		-- sub-classing
 		__index={
 		-- coords in world units
@@ -904,7 +903,7 @@ function make_npc(base,x,y,name)
 				self.visible=true
 				if(hit_t>0) memset(0x5f01,0x7,15) palt(0,true)
 				tquad(quad,self.uv)
-				pal()
+				if(hit_t>0) pal()
 				if self.state then
 					print(self.state,8*x1+8,8*y1,2)
 				end
@@ -921,7 +920,12 @@ function make_npc(base,x,y,name)
 			]]
 		end,
 		die=function(self)
-			make_part(small_blast_cls,self.x,self.y)
+			local x,y=self.x,self.y
+			make_part(small_blast_cls,x,y)
+			do_async(function()
+				wait_async(3)
+				make_crater(x,y,angle)
+			end)
 			self.dead=true
 		end,
 		hit=function(self,dmg)
@@ -1107,7 +1111,7 @@ function make_tank(x,y)
 		end
 	}
 
-	return make_npc(tank,x,y,"tank")
+	return make_npc(tank,x,y,0,"tank")
 end
 
 local heavy_tank_sprite=with_hitmask(make_sprite(182,32,16))
@@ -1139,7 +1143,7 @@ function make_heavy_tank(x,y)
 		end
 	}
 
-	return make_npc(tank,x,y,"heavy tk")
+	return make_npc(tank,x,y,0,"heavy tk")
 end
 
 local msl_tank_sprite=with_hitmask(make_sprite(178,32,16))
@@ -1180,7 +1184,7 @@ function make_msl_tank(x,y)
 		end
 	}
 
-	return make_npc(tank,x,y,"msl tk")
+	return make_npc(tank,x,y,0,"msl tk")
 end
 
 local heavy_turret_sprite=with_hitmask(make_sprite(76,32,24))
@@ -1248,9 +1252,25 @@ function make_heavy_turret(x,y)
 			return false,angle
 		end
 	}
-	return make_npc(turret,x,y,"heavy turret")
+	return make_npc(turret,x,y,0,"heavy turret")
 end
 
+-- blast marker
+function make_crater(x,y,angle)
+	local crater={
+		array=_blasts,
+		sh=16,
+		sw=16,
+		uv={
+			7,1,
+			9,1,
+			9,3,
+			7,3},
+		hp=1}
+	return make_npc(crater,x,y,angle,"crater")
+end
+
+-- static 4 direction turret
 function make_static_turret(x,y)
 	local reload_ttl=0,0
 	local turret={
@@ -1301,7 +1321,7 @@ function make_static_turret(x,y)
 			end
 		end
 	}
-	return make_npc(turret,x,y,"turret")
+	return make_npc(turret,x,y,0,"turret")
 end
 
 -- hidden missile silo
@@ -1334,7 +1354,7 @@ function make_msl_silo(x,y)
 			end
 		end
 	}
-	return make_npc(turret,x,y,"silo")
+	return make_npc(turret,x,y,0,"silo")
 end
 
 -- missile
@@ -1365,7 +1385,7 @@ function make_msl(x,y)
 			return true,angle 
 		end
 	}
-	return make_npc(msl,x,y,"msl")
+	return make_npc(msl,x,y,0,"msl")
 end
 
 function make_homing_msl(x,y,angle)
@@ -1396,7 +1416,7 @@ function make_homing_msl(x,y,angle)
 			return true,angle 
 		end
 	}
-	return make_npc(msl,x,y,"homing msl")
+	return make_npc(msl,x,y,0,"homing msl")
 end
 
 -->8
@@ -1529,6 +1549,14 @@ function draw_map(x,y,z,a)
 		y+=6
 	end
 	]]
+
+	-- craters
+	palt(0,false)
+	palt(3,true)
+	for _,crater in ipairs(_blasts) do
+		crater:draw(x,y,z,a)
+	end	
+	palt()
 end
 
 -->8
@@ -1562,13 +1590,13 @@ function play_state()
 	-- todo: time to complete from level (+ difficulty)
 	local score,lives,ttl=0,3,90*30
 	-- reset
-	_npcs,_parts,_bullets,_turrets={},{},{},0
+	_npcs,_parts,_bullets,_blasts,_turrets={},{},{},{},0
 	-- exit path
 	local exit_path={}
 
-	-- init map
+	-- init maps
 	-- collision map
-	_map,_cells,_cells_map,_grid,_map_lru={},{},{},{},{}
+	_map,_cells,_cells_map,_grid,_map_lru,_npc_map={},{},{},{},{},{}
 	-- 
 	local grid_w=4
 	-- grid_w intervals = grid_w+1^2 points
@@ -1654,7 +1682,7 @@ function play_state()
 			for _,npc in ipairs(_npcs) do
 				npc:draw(px,py,pz,pangle)
 			end
-		
+
 			plyr:draw()
 		
 			draw_parts(_bullets,px,py,pz,pangle)
@@ -1795,8 +1823,8 @@ function exit_level_state(score,lives,ttl,path)
 	}
 end
 
-
 function _init()
+	-- extend tline limits
 	poke(0x5f38,128)
 	poke(0x5f39,128)
 	_state=play_state()
@@ -2109,11 +2137,11 @@ b28706cb8128413c446d5f219662a71a0650489ac58fafab82e4aeeb4b60eac1d37b10dec445f9b4
 9c28ace85a62d4ed994a610d1cb5a6e2e3f1a013e23c479f1a7396f19c6a84a5709ae8b26707acc16e62e75809db39cabdad150e44937690a0ccdf8a3241581580141b00c01a0380787500e520ca345d1fa40bd1742c7a51696933d354d0c699d07a0b436278c45680a8340380740f01f02c05f193ded5aaed902cf636a1b32b
 bb5479b340ebbce1520acebf0580b41702fd8a01b6f6dfdc001d5e6c9b50ce98ea1b538c15e84aecda23f2645ab1804f5f83c07a0f81f87502e0dc1c6fbdf8058570af02fb8d1a5033c1b317ad67aa4e9d88b1344490743ef1d7fa93536f8df5bf37d81617c2ff80d2fe09b2d9db4c399b41c7ce35a771701e4fd79b58ac6bfd
 83b0f62826e61cc7990277298554ede56fb68efa9aab0b80efde70e6c56f6c6dadb9b18b7400d11790b8f39e41acd63deec077b8b47412b20941a6f4dec1d413992ea5062d8270c1edf4c3e2e6abd7d8960fbb49c7b45c1bd5d9bb776fecf0c33aef0a4bcff3a92e6f893630f77ef9ddd6741941bd74f0f83c297b2b8dd5f09e
-249076dec1e23c578f2d048fc8793f29e57cb797f31e67cd79bf39e77cf79ff41e87d17a3f49e97d37a7f51ea7d57abf59eb7d77aff61ec7d97b3f69ed7db7b7f71ee7dd7bbf79ef7df7bff81f07e17c3f89f17e37c7f91f27e57cbf99f37e77cffa1f47e97d3fa9f57eb7d7fb0498ff0040209309a4e27a8142a200426150b8
-64361d0f8844625138a4562a5028970ba5e2fb6db91690486452392458c4f0361b4dc6f75bb24b2f984c6650c5b2dd70b9592cd68b599cf67d3f88b198ec864b0986c462d02954ba65369d4fa8546a553aa556ad57ac566b55bae576bd5fb0586c563b2596cd67b45a6d56bb65b6dd6fb85c6e573ba5d6ed77bc5e6f57bbe5f6
-fd7fc06070583c26170d87c4627158bc66371d8fc86472593ca6572d97cc667359bce6773d9fd068745a3d26974da7d46a755abd66b75dafd86c765b3da6d76db7dc6e775bbde6f77dbfe070785c3e27178dc7e472795cbe67379dcfe8747a5d3ea757add7ec767b5dbee777bddf8800390011090c0001480d0001420e00014e
-0e0001481100014d1100114f1100014112001154130031571300015e1300014814000149140001591400014e15000142160001471600015c160001581700015c1800315e190001591a00110a1d00110e2000010b2300010d2400010a260001402600010d27000143270001482700013e2800010a2a0001102b0001432b000145
-2f003120310001493100310933003124330001183400310a3600011436000115370001193700011238003109390001223f0001273f0001344100112f420001334500300c4700056d47003255490033734900056d4b00000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+249076dec1e23c578f2d048fc8793f29e57cb797f31e67cd79bf39e77cf79ff41e87d17a3f49e97d37a7f51ea7d57abf59eb7d77aff61ec7d97b3f69ed7db7b7f71ee7dd7bbf79ef7df7bff81f07e17c3f89f17e37c7f91f27e57cbf99f37e77cffa1f47e97d3fa9f57eb7d7fb0498010140209309a4e27a8142a200426150b8
+64361d0f8844625138a4562a5028970ba5e2fb6c944b8b4864523924962a62781b0da6e37bacb45b934c665339a42d6cb75c2e564b35a2d66b3fa050622c663b2192c261b118b42a65369d4fa8546a553aa556ad57ac566b55bae576bd5fb0586c563b2596cd67b45a6d56bb65b6dd6fb85c6e573ba5d6ed77bc5e6f57bbe5f6
+fd7fc06070583c26170d87c4627158bc66371d8fc86472593ca6572d97cc667359bce6773d9fd068745a3d26974da7d46a755abd66b75dafd86c765b3da6d76db7dc6e775bbde6f77dbfe070785c3e27178dc7e472795cbe67379dcfe8747a5d3ea757add7ec767b5dbee777bddff0786200400011090c00112a0c0001480d00
+01360e0001420e00014e0e0001330f001123100001481100014d1100114f110001411200013b13001154130031571300015e1300014814000149140001591400014e1500013816000142160001471600015c160001581700015c1800315e1900013a1a0001591a00110a1d00110e2000010b2300010d2400010a260001402600
+010d27000143270001482700013e2800010a2a0001102b0001432b0001452f003120310001493100310933003124330001183400310a3600011436000115370001193700011238003109390001223f0001273f0001344100112f420001334500300c4700056d47003255490033734900056d4b00
 __sfx__
 000100002b52329543265532555323551215511f5511c5511955118551165511455113541105410d5310b52108521075210551103511025110151102400023000130003400024000140001400024000240001400
 0002000006743097530a7530975303743017210060102600006000060000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000

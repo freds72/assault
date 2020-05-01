@@ -5,7 +5,7 @@ function tquad(v,uv)
 	-- ipairs is slower for small arrays
 	for i=1,4 do
 		local p1=v[i]
-		local x1,y1,u1,v1=p1.x,p1.y,uv[i*2-1],uv[i*2]
+		local x1,y1,u1,v1=p1.x,p1.y,uv[(i<<1)-1],uv[i<<1]
 		local _x1,_y1,_u1,_v1=x1,y1,u1,v1
 		if(y0>y1) x0,y0,x1,y1,u0,v0,u1,v1=x1,y1,x0,y0,u1,v1,u0,v0
 		local dy=y1-y0
@@ -30,9 +30,7 @@ function tquad(v,uv)
 				if ca<=cb then
 					-- sub-pix shift
 					local sa=ca-a
-					au+=sa*dau
-					av+=sa*dav
-					tline(ca,y,cb,y,au,av,dau,dav)
+					tline(ca,y,cb,y,au+sa*dau,av+sa*dav,dau,dav)
 				end
 			else
 				spans[y]={x=x0,u=u0,v=v0}
