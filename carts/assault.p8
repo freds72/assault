@@ -1505,21 +1505,22 @@ end
 -- init/update/draw/states
 local _state
 
-function draw_hud(score,lives,ttl)
+function draw_hud(score,hi_score,lives,ttl)
 	printb("SCORE",18,0)
 
-	local s=score_tostr(score)
-	printb(s,18,6)
+	printb(score_tostr(score),18,6)
 	
 	printb("HI",100,0)
 
-	printb("99999",82,6)
+	printb(score_tostr(hi_score),82,6)
 
-	printb("TIME",54,0)
+	if ttl<99*30 then
+		printb("TIME",54,0)
 
-	-- frames to seconds
-	local t=tostr(ttl\30)
-	printb(t,60,6)
+		-- frames to seconds
+		local t=tostr(ttl\30)
+		printb(t,60,6)
+	end
 
 	for i=0,lives-1 do
 		spr(166,18+i*6,120)
@@ -1635,14 +1636,12 @@ function play_state()
 			draw_parts(_parts,px,py,pz,pangle)
 
 			-- any messages?
-			for _,msg in pairs(msgs) do
-				printb(msg.txt,msg.x,msg.y,msg.c)
-			end
+			printba(msgs)
 
 			--line(64,64,64+16*ca,64+16*sa,11)
 			--line(64,64,64-16*sa,64+16*ca,8)
 	
-			draw_hud(score,lives,ttl)
+			draw_hud(score,hi_score,lives,ttl)
 		end,
 		update=function()
 			-- todo: loose live if timeout
@@ -1651,7 +1650,7 @@ function play_state()
 			cam_update()
 
 			if _turrets==0 then
-				_state=exit_level_state(score,lives,ttl,exit_path)
+				_state=exit_level_state(score,hi_score,lives,ttl,exit_path)
 				return
 			end
 
@@ -1662,20 +1661,22 @@ function play_state()
 				-- 
 				msgs={{x=30,y=50,txt="YOU WERE HIT"}}
 				do_async(function()
-					wait_async(30)
+					wait_async(60)
 					-- no lives?
 					if lives<1 then
-						msgs={{x=40,y=60,txt="GAME OVER",c=8}}
-						wait_async(30)
-						_state=game_over_state(hi_score)
+						-- TODO: json
+						msgs={{x=39,y=50,txt="GAME OVER",c=8}}
+						wait_async(60)
+						_state=game_over_state(score,hi_score)
 						return
 					end
 
 					-- remove all active bullets
 					_bullets={}
+					-- todo: json
 					msgs={
 						{x=45,y=50,txt="PLAYER"},
-						{x=49,y=56,txt="READY",c=7}
+						{x=49,y=60,txt="READY",c=7}
 					}
 					wait_async(30)
 					msgs=nil
@@ -1703,14 +1704,37 @@ function play_state()
 	}
 end
 
-function game_over_state(hi_score)
-	-- persists hi score
+function game_over_state(score,hi_score)
+	local selection,ttl=0,10*30
+	local msgs={
+		{x=39,y=50,txt="𝘨𝘢𝘮𝘦 𝘰𝘷𝘦𝘳",c=8},
+		{x=37,y=60,txt="𝘤𝘰𝘯𝘵𝘪𝘯𝘶𝘦 ?",c=7},
+		{x=60,y=70,txt="𝘺𝘦𝘴"},
+		{x=60,y=80,txt="𝘯𝘰"}
+	}
+
+	-- persist hi score
 	dset(1,hi_score)
 	return {
 		update=function()
+			if(btnp(2)) selection+=1
+			if(btnp(3)) selection-=1
+			if(btnp(4) or btnp(5)) then
+				if selection==0 then
+					-- yes (same level)
+					_state=play_state()
+				else
+					-- no
+					load("#assault_title")
+				end
+			end
+			selection=(selection%2+2)%2
 		end,
 		draw=function()
-			
+			printba(msgs)
+			if(time_t%2==0)printb("█",45,70+selection*10)
+			spr(96,56,106,2,2)
+			draw_hud(score,hi_score,0,5000)
 		end
 	}
 end
@@ -1823,7 +1847,7 @@ function _init()
 	-- extend tline limits
 	poke(0x5f38,128)
 	poke(0x5f39,128)
-	_state=play_state()
+	_state=game_over_state(1,1,0,4000)-- play_state()
 end
 
 function _update()

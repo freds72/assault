@@ -8,6 +8,12 @@ function printb(s,x,y,c)
 	do_printb(s,x+1,y+1,true)
 	do_printb(s,x,y,false,c)
 end
+-- print an array of messages
+function printba(msgs)
+	for _,msg in pairs(msgs) do
+		printb(msg.txt,msg.x,msg.y,msg.c)
+	end
+end
 function do_printb(s,x,y,shadow,c)
 	local _bold_data=_bold_data
 	for k=1,#s do
