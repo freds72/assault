@@ -1,33 +1,12 @@
 -- helper functions for bold punny font & number 
 -- holes coordinates & metadata
-local _bold_data={
-	A={2,2,2,4},
-	B={2,2},
-	D={2,2,2,3},
-	G={2,2,2,3},
-	H={2,1,2,4},
-	K={2,1,2,4},
-	M={2,1,1,4,3,4},
-	N={2,4},
-	O={2,2,2,3},
-	P={2,2},
-	Q={2,2},
-	R={2,2,2,4},
-	U={2,1},
-	V={2,1},
-	W={1,1,3,1},
-	X={2,1,2,4},
-	Y={2,1},
-	["0"]={2,1,2,2,2,3},
-	["4"]={2,0},
-	["6"]={2,3},
-	["8"]={2,1,2,3},
-	["9"]={2,1}
-}
+
+local _bold_data=json_parse'{"A":[2,2,2,4],"B":[2,2],"D":[2,2,2,3],"G":[2,2,2,3],"H":[2,1,2,4],"K":[2,1,2,4],"M":[2,1,1,4,3,4],"N":[2,4],"O":[2,2,2,3],"P":[2,2],"Q":[2,2],"R":[2,2,2,4],"U":[2,1],"V":[2,1],"W":[1,1,3,1],"X":[2,1,2,4],"Y":[2,1],"0":[2,1,2,2,2,3],"4":[2,0],"6":[2,3],"8":[2,1,2,3],"9":[2,1]}'
+
 -- bold print
-function printb(s,x,y)
+function printb(s,x,y,c)
 	do_printb(s,x+1,y+1,true)
-	do_printb(s,x,y)
+	do_printb(s,x,y,false,c)
 end
 function do_printb(s,x,y,shadow,c)
 	local _bold_data=_bold_data

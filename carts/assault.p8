@@ -4,8 +4,10 @@ __lua__
 -- assault
 -- by @freds72
 
+#include includes/json.lua
 #include includes/bold.lua
 #include includes/bigscore.lua
+#include includes/tquad.lua
 
 -- misc helper functions
 local shkx,shky=0,0
@@ -64,25 +66,8 @@ function padding(s)
 	return sub("00000",1,5-#s)..s
 end
 
-local dither_pat={0b1111111111111111,0b0111111111111111,0b0111111111011111,0b0101111111011111,0b0101111101011111,0b0101101101011111,0b0101101101011110,0b0101101001011110,0b0101101001011010,0b0001101001011010,0b0001101001001010,0b0000101001001010,0b0000101000001010,0b0000001000001010,0b0000001000001000,0b0000000000000000}
-local fadetable={
-	{5,13},
-	{13,6},
-	{13,6},
-	{13,6},
-	{14,15},
-	{13,6},
-	{6,7},
-	{7,7},
-	{14,14},
-	{10,15},
-	{10,15},
-	{11,6},
-	{12,6},
-	{6,6},
-	{14,15},
-	{15,7}
-   }
+local dither_pat=json_parse'[0b1111111111111111,0b0111111111111111,0b0111111111011111,0b0101111111011111,0b0101111101011111,0b0101101101011111,0b0101101101011110,0b0101101001011110,0b0101101001011010,0b0001101001011010,0b0001101001001010,0b0000101001001010,0b0000101000001010,0b0000001000001010,0b0000001000001000,0b0000000000000000]'
+local fadetable=json_parse'[[5,13],[13,6],[13,6],[13,6],[14,15],[13,6],[6,7],[7,7],[14,14],[10,15],[10,15],[11,6],[12,6],[6,6],[14,15],[15,7]]'
    
 function fade(i)
 	for c=0,15 do
@@ -181,10 +166,14 @@ function to_npc_map(x,y)
 	return x\2|(y\2)<<6
 end
 
+-- blast
+local small_blast_cls=json_parse'{"ttl":20,"kind":7,"r":1,"snd":2}'
+local large_blast_cls=json_parse'{"ttl":30,"kind":7,"r":3,"snd":7}'
+
 -->8
 -- player
 function make_plyr(x,y,z,angle)
-	local reload_ttl,reload_nuke_ttl,acc,da,dz,mortar_angle,underwater=0,0,0,0,0,0
+	local hit_t,reload_ttl,reload_nuke_ttl,acc,da,dz,mortar_angle,underwater=0,0,0,0,0,0,0
 	-- threads positions & velocities
 	local lthread,rthread,lthread_acc,rthread_acc=0,0,0,0
 	local states,state,nuke_mode,driving_mode,dead_mode
@@ -213,24 +202,11 @@ function make_plyr(x,y,z,angle)
 	
 	-- player-specific particles
 	-- regular bullet
-	local bullet_cls=with_hitmask({
-		ttl=30,
-		ssx=16,ssy=56,
-		sw=8,sh=8,
-		kind=0,
-		side=2
-	})
-	local nuke_shell_cls={
-		ttl=90,
-		ssx=16,ssy=48,
-		sw=8,sh=8,
-		kind=1
-	}
+	local bullet_cls=with_hitmask(json_parse'{"ttl":30,"ssx":16,"ssy":56,"sw":8,"sh":8,"kind":0,"side":2}')
+	local nuke_shell_cls=json_parse'{"ttl":90,"ssx":16,"ssy":48,"sw":8,"sh":8,"kind":1}'
+
 	-- nuke marker
-	local marker_cls={
-		ttl=20,
-		kind=3
-	}
+	local marker_cls=json_parse'{"ttl":20,"kind":3}'
 
 	function fire_bullet(ca,sa)
 		if btn(5) and reload_ttl<0 then
@@ -410,22 +386,25 @@ function make_plyr(x,y,z,angle)
 				end
 			end
 		end,
-		die=function()
-			local ttl=40
-			acc,da=0,0
-			dead_mode,driving_mode,nuke_mode,underwater=true
-			return function(self)
-				ttl-=1
-				-- todo: wait for input + message + hide sprite
-				if(ttl<0) make_part(small_blast_cls,x,y)
+		die=function(self)
+			acc,da,hit_t=0,0,1
+			driving_mode,nuke_mode,underwater=nil
+			do_async(function()
+				-- blink then blast
+				wait_async(20)
+				-- todo: adjust position...
+				make_part(small_blast_cls,x,y)
+				self.dead=true
+			end)
+			return function()
+				-- no input
+				hit_t+=1
 			end
 		end
 	}
 
 	-- initial state
 	state=states.drop()
-
-	local bands={7,7,7,8,7,8,7,8}
 
 	return {
 		x=x,
@@ -442,7 +421,9 @@ function make_plyr(x,y,z,angle)
 			return x,y,z,angle
 		end,
 		draw=function(self)
-			if(dead_mode) memset(0x5f01,lerpa(bands,(4*time()%1)),15)
+			if(self.dead) return
+			-- blink
+			if(hit_t>0 and time_t%2==0) memset(0x5f01,7,15)
 			if driving_mode then
 				if(underwater) pal(5,6)
 				if lthread_acc>0 then
@@ -494,18 +475,21 @@ function make_plyr(x,y,z,angle)
 			end
 		end,
 		collide=function(self,p)
-			if(dead_mode) return
+			-- avoid reentrancy
+			if(hit_t>0) return
 			local col,a,b,x0,y0,y1=collide(self,p)
 			if col and intersect_bitmasks(a,b,x0,y0,y1) then
 				return true
 			end
 		end,
-		hit=function()
-			-- prent
-			-- state=states.die()
+		hit=function(self)
+			state=states.die(self)
 		end,
-		exit=function(self,path)
-			state=states.find_exit(self,path)
+		reset=function(self)
+			-- restore player input
+			self.dead=nil
+			hit_t=0
+			state=states.drive(self)
 		end,
 		update=function(self)
 			reload_ttl-=1
@@ -536,16 +520,7 @@ end
 -- bullets: interact with actors or background + can spawn particles
 local _parts,_bullets={},{}
 -- blast data
-local blast_circles={
-	{{r=8,c=7}},
-	{{r=6,c=0}},
-	{{r=5,c=2},{r=4,c=8},{r=3,c=10},{r=2,c=7}},
-	{{r=7,c=2},{r=6,c=8},{r=5,c=10},{r=4,c=7}},
-	{{r=8,c=0},{r=6,c=2},{r=5,c=9},{r=3,c=10},{r=1,c=7}},
-	{{r=8,c=0,fp=0xa5a5.ff,fn=circ}},
-	{{r=8,c=0,fp=0x5a5a.ff,fn=circ}},
-	{{r=8,c=0,fp=0x5a5a.ff,fn=circ}}
-}
+local blast_circles=json_parse'[[{"r":8,"c":7}],[{"r":6,"c":0}],[{"r":5,"c":2},{"r":4,"c":8},{"r":3,"c":10},{"r":2,"c":7}],[{"r":7,"c":2},{"r":6,"c":8},{"r":5,"c":10},{"r":4,"c":7}],[{"r":8,"c":0},{"r":6,"c":2},{"r":5,"c":9},{"r":3,"c":10},{"r":1,"c":7}],[{"r":8,"c":0,"fp":0xa5a5.ff,"fn":"circ"}],[{"r":8,"c":0,"fp":0xa5a5.ff,"fn":"circ"}],[{"r":8,"c":0,"fp":0xa5a5.ff,"fn":"circ"}]]'
 
 function update_parts(parts)
 	local px,py,pz,pangle=plyr:get_pos()
@@ -652,6 +627,7 @@ end
 
 local _next_part=0
 function make_part(base_cls,x,y,z,dx,dy,dz)
+	assert(base_cls.ttl,"missing ttl")
 	local p=setmetatable({
 		-- age
 		t=0,
@@ -664,7 +640,7 @@ function make_part(base_cls,x,y,z,dx,dy,dz)
 	},{__index=base_cls})
 	_parts[_next_part]=p
 	_next_part=(_next_part+1)%1024
-	if(p.sfx) sfx(p.sfx)
+	if(p.snd) sfx(p.snd)
 	return p
 end
 
@@ -682,37 +658,13 @@ function make_bullet(base_cls,x,y,z,dx,dy,dz)
 	},{__index=base_cls})
 	_bullets[_next_blt]=b
 	_next_blt=(_next_blt+1)%1024
+	if(b.snd) sfx(b.snd)
 	return b
 end
 
 -- enemy bullets
-local small_bullet_cls=with_hitmask({
-	ssx=16,ssy=40,
-	sw=8,sh=8,
-	kind=0,
-	side=1,
-	ttl=40
-})
-local large_bullet_cls=with_hitmask({
-	ssx=16,ssy=32,
-	sw=8,sh=8,
-	kind=0,
-	side=1,
-	ttl=180
-})
-
--- blast
-local small_blast_cls={
-	ttl=10,
-	kind=7,
-	r=1,
-	sfx=2
-}
-local large_blast_cls={
-	ttl=30,
-	kind=7,
-	r=3
-}
+local small_bullet_cls=with_hitmask(json_parse'{"ssx":16,"ssy":40,"sw":8,"sh":8,"kind":0,"side":1,"ttl":40,"snd":8}')
+local large_bullet_cls=with_hitmask(json_parse'{"ssx":16,"ssy":32,"sw":8,"sh":8,"kind":0,"side":1,"ttl":180}')
 
 -- nuke "particle"
 function make_nuke(x,y)
@@ -782,11 +734,11 @@ function decompress(mem,fn)
 	for i=0,255 do
 		code[i>>16]={i}
 	end
-    local buffer,buffer_bits,index,prefix=0,0,0
+  local len,buffer,buffer_bits,index,prefix=peek2(mem),0,0,0
 
-	local x,y,len=0,0,peek2(mem)
+	local x,y=0,0
 	mem+=2
-    while index < len or buffer_bits >= code_bits do
+  while index < len or buffer_bits >= code_bits do
         -- read buffer
 		while index < len and buffer_bits < code_bits do
 			buffer=buffer<<8|@mem>>16
@@ -890,9 +842,6 @@ function make_npc(base,x,y,angle,name)
 				if(hit_t>0) memset(0x5f01,0x7,15) palt(0,true)
 				tquad(quad,self.uv)
 				if(hit_t>0) pal()
-				if self.state then
-					print(self.state,8*x1+8,8*y1,2)
-				end
 			end
 			--[[
 			if self.input then
@@ -1001,6 +950,7 @@ function make_tank(x,y)
 		if reload_ttl<0 and self.visible then
 			local ca,sa=cos(angle),-sin(angle)
 			make_bullet(small_bullet_cls,self.x+ca,self.y+sa,0,ca/2,sa/2)
+			
 			reload_ttl=25
 		end
 	end
@@ -1054,7 +1004,8 @@ function make_tank(x,y)
 		function(self)
 			return function()
 				local x,y,px,py=self.x,self.y,plyr.x,plyr.y
-				if dist(x,y,px,py)<8 then
+				local d=dist(x,y,px,py)
+				if d>4 and d<8 then
 					local target_angle,angle=atan2(px-x,-py+y),angle
 					-- shortest angle
 					local dtheta=target_angle-angle
@@ -1244,6 +1195,7 @@ end
 -- blast marker
 function make_crater(x,y,angle)
 	local crater={
+		-- not a regular npc
 		array=_blasts,
 		sh=16,
 		sw=16,
@@ -1412,7 +1364,6 @@ end
 
 -->8
 -- map & draw helpers
-#include includes/tquad.lua
 
 -- check for the given tile flag
 function fmget(x,y)
@@ -1576,10 +1527,14 @@ function draw_hud(score,lives,ttl)
 end
 
 function play_state()
-	-- restore map
+	-- in case level is replayed
 	reload()
+	-- read saved state
+	-- make sure player get at least 1 coin!
+	local coins,hi_score=max(dget(0),1),dget(1)
+
 	-- todo: time to complete from level (+ difficulty)
-	local score,lives,ttl=0,3,90*30
+	local score,lives,ttl,dead_state,msgs=0,3,90*30
 	-- reset
 	_npcs,_parts,_bullets,_blasts,_turrets={},{},{},{},0
 	-- exit path
@@ -1652,7 +1607,7 @@ function play_state()
 	local n=peek2(mem)
 	mem+=2
 	for i=1,n do
-		local id,x,y,a=peek(mem),peek(mem+1),peek(mem+2),peek(mem+3)
+		local id,x,y,a=@mem,@(mem+1),@(mem+2),@(mem+3)
 		local fn=actor_factory[id]
 		assert(fn,"unknown actor id:"..id.."@"..x.."/"..y)
 		fn(x,y,a)
@@ -1678,7 +1633,12 @@ function play_state()
 		
 			draw_parts(_bullets,px,py,pz,pangle)
 			draw_parts(_parts,px,py,pz,pangle)
-			
+
+			-- any messages?
+			for _,msg in pairs(msgs) do
+				printb(msg.txt,msg.x,msg.y,msg.c)
+			end
+
 			--line(64,64,64+16*ca,64+16*sa,11)
 			--line(64,64,64-16*sa,64+16*ca,8)
 	
@@ -1692,22 +1652,65 @@ function play_state()
 
 			if _turrets==0 then
 				_state=exit_level_state(score,lives,ttl,exit_path)
+				return
 			end
 
 			plyr:update()
+			if plyr.dead and not dead_state then
+				dead_state=true
+				lives-=1
+				-- 
+				msgs={{x=30,y=50,txt="YOU WERE HIT"}}
+				do_async(function()
+					wait_async(30)
+					-- no lives?
+					if lives<1 then
+						msgs={{x=40,y=60,txt="GAME OVER",c=8}}
+						wait_async(30)
+						_state=game_over_state(hi_score)
+						return
+					end
 
-			-- update actors
-			for _,npc in ipairs(_npcs) do
-				npc:update()
-				if npc.dead then
-					-- any points?
-					if(npc.score) score+=npc.score
-					del(_npcs,npc)
+					-- remove all active bullets
+					_bullets={}
+					msgs={
+						{x=45,y=50,txt="PLAYER"},
+						{x=49,y=56,txt="READY",c=7}
+					}
+					wait_async(30)
+					msgs=nil
+					plyr:reset()
+					dead_state=nil
+				end)
+			end
+			
+			-- update actors (unless player is dead)
+			if not dead_state then
+				for _,npc in ipairs(_npcs) do
+					npc:update()
+					if npc.dead then
+						-- any points?
+						if(npc.score) score+=npc.score
+						if(score>hi_score) hi_score=score
+						del(_npcs,npc)
+					end
 				end
 			end
-		
+
 			update_parts(_bullets)
 			update_parts(_parts)
+		end
+	}
+end
+
+function game_over_state(hi_score)
+	-- persists hi score
+	dset(1,hi_score)
+	return {
+		update=function()
+		end,
+		draw=function()
+			
 		end
 	}
 end
@@ -1815,6 +1818,8 @@ function exit_level_state(score,lives,ttl,path)
 end
 
 function _init()
+	cartdata("freds72_assault")
+	
 	-- extend tline limits
 	poke(0x5f38,128)
 	poke(0x5f39,128)
@@ -2134,10 +2139,12 @@ fd7fc06070583c26170d87c4627158bc66371d8fc86472593ca6572d97cc667359bce6773d9fd068
 01360e0001420e00014e0e0001330f001123100001481100014d1100114f110001411200013b13001154130031571300015e1300014814000149140001591400014e1500013816000142160001471600015c160001581700015c1800315e1900013a1a0001591a00110a1d00110e2000010b2300010d2400010a260001402600
 010d27000143270001482700013e2800010a2a0001102b0001432b0001452f003120310001493100310933003124330001183400310a3600011436000115370001193700011238003109390001223f0001273f0001344100112f420001334500300c4700056d47003255490033734900056d4b00000000000000000000000000
 __sfx__
-000100002b52329543265532555323551215511f5511c5511955118551165511455113541105410d5310b52108521075210551103511025110151102400023000130003400024000140001400024000240001400
+0007000014553126250f5030e5030e5000c50008401064010440118501165011450113501105010d5010b50108501075010550103501025010150102400023000130003400024000140001400024000240001400
 0002000006743097530a7530975303743017210060102600006000060000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 000400000c343236450933520621063311b6210432116611023210f611013110a6110361104600036000260001600016000460003600026000160001600016000160004600036000260001600016000160001600
 001000000835307343053330332301313063030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 0003000032554305442e5402c5402a5302853025530225301f5301d5201a52018520155201452012520115200f5200d5200c5200c5200a5200952007520065200552004520025250151500515025000150000000
 0005000011433084530e43317705127000e7000770004700007001470011700117000f7000d7000c7000b700097000870006700047000270000700017000070005700097000b7000b70009700007000070000700
 00050000080300d0500b0300704500000010000770004700007001470011700117000f7000d7000c7000b700097000870006700047000270000700017000070005700097000b7000b70009700007000070000700
+00060000134630b67319473116731b4730f663194630d663154530b64313443086330f643076330c6330563309623036230661302613066000560004600046000360003600036000260002600016000160001600
+00070000191430f635000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
