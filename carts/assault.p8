@@ -1659,13 +1659,12 @@ function play_state()
 				dead_state=true
 				lives-=1
 				-- 
-				msgs={{x=30,y=50,txt="YOU WERE HIT"}}
+				msgs=json_parse'[{"x":30,"y":50,"txt":"YOU WERE HIT"}]'
 				do_async(function()
 					wait_async(60)
 					-- no lives?
 					if lives<1 then
-						-- TODO: json
-						msgs={{x=39,y=50,txt="GAME OVER",c=8}}
+						msgs=json_parse'[{"x":39,"y":50,"txt":"GAME OVER","c":8}]'
 						wait_async(60)
 						_state=game_over_state(score,hi_score)
 						return
@@ -1673,11 +1672,8 @@ function play_state()
 
 					-- remove all active bullets
 					_bullets={}
-					-- todo: json
-					msgs={
-						{x=45,y=50,txt="PLAYER"},
-						{x=49,y=60,txt="READY",c=7}
-					}
+					
+					msgs=json_parse'[{"x":45,"y":50,"txt":"PLAYER"},{"x":49,"y":60,"txt":"READY","c":7}]'
 					wait_async(30)
 					msgs=nil
 					plyr:reset()
@@ -1706,12 +1702,7 @@ end
 
 function game_over_state(score,hi_score)
 	local selection,ttl=0,10*30
-	local msgs={
-		{x=39,y=50,txt="𝘨𝘢𝘮𝘦 𝘰𝘷𝘦𝘳",c=8},
-		{x=37,y=60,txt="𝘤𝘰𝘯𝘵𝘪𝘯𝘶𝘦 ?",c=7},
-		{x=60,y=70,txt="𝘺𝘦𝘴"},
-		{x=60,y=80,txt="𝘯𝘰"}
-	}
+	local msgs=json_parse'[{"x":39,"y":50,"txt":"GAME OVER","c":8},{"x":37,"y":60,"txt":"CONTINUE ?","c":7},{"x":60,"y":70,"txt":"YES"},{"x":60,"y":80,"txt":"NO"}]'
 
 	-- persist hi score
 	dset(1,hi_score)
@@ -1719,6 +1710,7 @@ function game_over_state(score,hi_score)
 		update=function()
 			if(btnp(2)) selection+=1
 			if(btnp(3)) selection-=1
+			selection=(selection%2+2)%2
 			if(btnp(4) or btnp(5)) then
 				if selection==0 then
 					-- yes (same level)
@@ -1728,7 +1720,6 @@ function game_over_state(score,hi_score)
 					load("#assault_title")
 				end
 			end
-			selection=(selection%2+2)%2
 		end,
 		draw=function()
 			printba(msgs)
