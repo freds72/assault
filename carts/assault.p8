@@ -67,8 +67,9 @@ function padding(s)
 end
 
 local dither_pat=json_parse'[0b1111111111111111,0b0111111111111111,0b0111111111011111,0b0101111111011111,0b0101111101011111,0b0101101101011111,0b0101101101011110,0b0101101001011110,0b0101101001011010,0b0001101001011010,0b0001101001001010,0b0000101001001010,0b0000101000001010,0b0000001000001010,0b0000001000001000,0b0000000000000000]'
-local fadetable=json_parse'[[5,13],[13,6],[13,6],[13,6],[14,15],[13,6],[6,7],[7,7],[14,14],[10,15],[10,15],[11,6],[12,6],[6,6],[14,15],[15,7]]'
-   
+
+-- credits:
+local fadetable=json_parse'[[5,13],[13,6],[13,6],[13,6],[14,15],[13,6],[6,7],[7,7],[14,14],[10,15],[10,15],[11,6],[12,6],[6,6],[14,15],[15,7]]'   
 function fade(i)
 	for c=0,15 do
 		if flr(i+1)>=3 then
@@ -151,15 +152,15 @@ end
 
 -->8
 -- game globals
-local time_t=0
-local jumppads={}
+time_t=0
+jumppads={}
 -- turrets: stores number of heavy turrets
-local _npcs,plyr,_turrets,_blasts,_npc_map
-local _map,_cells,_cells_map,_grid,_map_lru
+_npcs,plyr,_turrets,_blasts,_npc_map=nil
+_map,_cells,_cells_map,_grid,_map_lru=nil
 
 -- todo: remove for optimisation
-local gravity=-0.04
-local red_blink={0,1,2,2,8,8,8,2,2,1}
+gravity=-0.04
+red_blink={0,1,2,2,8,8,8,2,2,1}
 
 -- actors mapr
 function to_npc_map(x,y)
@@ -777,6 +778,14 @@ end
 
 -->8
 -- npc
+light_tank_sprite=with_hitmask(make_sprite(64,16,16))
+heavy_tank_sprite=with_hitmask(make_sprite(182,32,16))
+msl_tank_sprite=with_hitmask(make_sprite(178,32,16))
+heavy_turret_sprite=with_hitmask(make_sprite(76,32,24))
+
+_npc_templates=json_parse'{"msl":{"sw":8,"sh":8,"w":0.4,"h":0.4,"acc":0.02,"friction":1},"tank":{"w":0.4,"h":0.4,"sprite":"light_tank_sprite","uv":[0,0,2,0,2,2,0,2],"hp":1,"acc":0.008,"friction":0.9,"side":1,"score":10},"heavy_tank":{"w":0.8,"h":0.8,"sprite":"heavy_tank_sprite","uv":[0,3,4,3,4,5,0,5],"hp":10,"acc":0.002,"side":1,"score":50},"msl_tank":{"w":0.8,"h":0.8,"sprite":"msl_tank_sprite","uv":[4,3,8,3,8,5,4,5],"hp":8,"side":1,"score":50},"heavy_turret":{"uv":[2,0,6,0,6,3,2,3],"hp":20,"side":1,"score":500,"sprite":"heavy_turret_sprite"},"crater":{"sh":16,"sw":16,"uv":[7,1,9,1,9,3,7,3]},"turret":{"sh":16,"sw":16,"hp":1,"side":1,"score":10},"silo":{"sh":8,"sw":8},"homing_msl":{"w":0.4,"h":0.4,"sw":8,"sh":8,"uv":[1,2,2,2,2,3,1,3],"acc":0.04,"friction":0.87}}'
+
+-- returns true if npc area is occupied
 function solid_npc(a,dx,dy)
 	local x,y,w,h=a.x+dx,a.y+dy,a.w,a.h
 	return 
@@ -786,8 +795,16 @@ function solid_npc(a,dx,dy)
 		_npc_map[to_npc_map(x+w,y+h)]
 end
 
-function make_npc(base,x,y,angle,name)
+function make_npc(name,base,x,y,angle)
 	local acc,hit_t=0,0
+	angle=angle or 0
+
+	-- retrieve base properties from json metadata
+	for k,v in pairs(_npc_templates[name]) do
+		-- convert number to score
+		if(k=="score") v>>=16
+		base[k]=v
+	end
 
 	-- quad
 	-- texspace -> world space
@@ -804,7 +821,7 @@ function make_npc(base,x,y,angle,name)
 		{x=0,y=0,ix=-w,iy=h}
 	}
 
-	return add(base.array or _npcs,setmetatable(base,{
+	return add(base.dst or _npcs,setmetatable(base,{
 		-- sub-classing
 		__index={
 		-- coords in world units
@@ -814,9 +831,9 @@ function make_npc(base,x,y,angle,name)
 		draw=function(self,x0,y0,z0,a0)
 			local ca,sa=cos(a0),-sin(a0)
 			local x1,y1=self.x-x0,self.y-y0
-			local scale=(self.z+8)/(z0+8)
+			local z,scale=8/(z0+8),(self.z+8)/(z0+8)
 			-- position in screen space (map units)
-			x1,y1=scale*(ca*x1+sa*y1)+8,scale*(-sa*x1+ca*y1)+14
+			x1,y1=z*(ca*x1+sa*y1)+8,z*(-sa*x1+ca*y1)+14
 			
 			ca,sa=cos(angle-a0),-sin(angle-a0)
 			local outcode=0xffff
@@ -859,7 +876,8 @@ function make_npc(base,x,y,angle,name)
 			make_part(small_blast_cls,x,y)
 			do_async(function()
 				wait_async(3)
-				make_crater(x,y,angle)
+				-- leave ground mark
+				make_npc("crater",{dst=_blasts},x,y,angle)
 			end)
 			self.dead=true
 		end,
@@ -880,9 +898,6 @@ function make_npc(base,x,y,angle,name)
 				angle=target_angle
 			end
 			if move then
-				assert(self.w,"invalid w for:"..name)
-				assert(self.h,"invalid w for:"..name)
-
 				-- prev pos
 				_npc_map[to_npc_map(self.x,self.y)]=nil
 
@@ -939,9 +954,8 @@ function make_npc(base,x,y,angle,name)
 		end
 	}}))
 end
--- create actors
-local npc_id=0
-local light_tank_sprite=with_hitmask(make_sprite(64,16,16))
+
+-- npc classes
 
 function make_tank(x,y)
 	local angle,reload_ttl,states,state=0,25
@@ -1024,88 +1038,34 @@ function make_tank(x,y)
 		end
 	}
 
-	local tank={
-		w=0.4,
-		h=0.4,
-		sprite=light_tank_sprite,
-		uv={
-			0,0,
-			2,0,
-			2,2,
-			0,2},
-		hp=1,
-		acc=0.008,
-		friction=0.9,
-		side=1,
-		score=10>>16,
+	return make_npc("tank",{
 		control=function(self)
 			reload_ttl-=1
-			-- idle?
-			if not state and dist(self.x,self.y,plyr.x,plyr.y)<20 then
+			-- idle and visible?
+			if not state and self.visible then
 				state,reload_ttl=rnd(states)(self),30
 			end
 			if(state) return state(self)
 		end
-	}
-
-	return make_npc(tank,x,y,0,"tank")
+		},x,y)
 end
 
-local heavy_tank_sprite=with_hitmask(make_sprite(182,32,16))
 function make_heavy_tank(x,y)
 	local angle,acc,move_t=0,0.1,0
 	local dx,dy=0,0
-	-- can npc move?
-	local id=npc_id
-	npc_id+=1
 
-	local tank={
-		w=0.8,
-		h=0.8,
-		sprite=heavy_tank_sprite,
-		uv={
-			0,3,
-			4,3,
-			4,5,
-			0,5},
-		hp=10,
-		acc=0.002,
-		side=1,
-		score=50>>16,
-		-- co-routine data
-		seek_dly=60,
-		path={},
-		control=function(self)
+	return make_npc("heavy_tank",{
+		control=function()
 			return false,0
 		end
-	}
-
-	return make_npc(tank,x,y,0,"heavy tk")
+	},x,y)
 end
 
-local msl_tank_sprite=with_hitmask(make_sprite(178,32,16))
 function make_msl_tank(x,y)
 	local angle,acc,move_t,reload_ttl=0,0.1,0,0
 	local dx,dy=0,0
-	-- can npc move?
-	local id=npc_id
-	npc_id+=1
 
-	local tank={
-		w=0.8,
-		h=0.8,
-		sprite=msl_tank_sprite,
-		uv={
-			4,3,
-			8,3,
-			8,5,
-			4,5},
-		hp=8,
-		side=1,
-		score=50>>16,
-		-- co-routine data
-		seek_dly=60,
-		path={},
+	return make_npc("msl_tank",{
 		control=function(self)
 			reload_ttl-=1
 			if reload_ttl<0 then
@@ -1119,28 +1079,17 @@ function make_msl_tank(x,y)
 			end
 			return false,0
 		end
-	}
-
-	return make_npc(tank,x,y,0,"msl tk")
+	},x,y)
 end
-
-local heavy_turret_sprite=with_hitmask(make_sprite(76,32,24))
+ 
 function make_heavy_turret(x,y)
 	local toward=make_lerp_angle(0,0.1)
 	local reload_delay,reload_ttl=_turrets*40
 	-- records total number of turrets
 	-- used to terminate current level
 	_turrets+=1
-	local turret={
-		uv={
-			2,0,
-			6,0,
-			6,3,
-			2,3},
-		hp=20, --debug
-		side=1,
-		score=500>>16,
-		sprite=heavy_turret_sprite,
+
+	return make_npc("heavy_turret",{
 		die=function(self)
 			_turrets-=1
 			self.dead=true
@@ -1187,36 +1136,14 @@ function make_heavy_turret(x,y)
 				end
 			end
 			return false,angle
-		end
-	}
-	return make_npc(turret,x,y,0,"heavy turret")
-end
-
--- blast marker
-function make_crater(x,y,angle)
-	local crater={
-		-- not a regular npc
-		array=_blasts,
-		sh=16,
-		sw=16,
-		uv={
-			7,1,
-			9,1,
-			9,3,
-			7,3},
-		hp=1}
-	return make_npc(crater,x,y,angle,"crater")
+		end	
+	},x,y)
 end
 
 -- static 4 direction turret
 function make_static_turret(x,y)
 	local reload_ttl=0,0
-	local turret={
-		sh=16,
-		sw=16,
-		hp=1,
-		side=1,
-		score=10>>16,
+	return make_npc("turret",{
 		draw=function()
 			-- built-in map
 		end,
@@ -1224,7 +1151,6 @@ function make_static_turret(x,y)
 			self.dead=true
 			local x,y=self.x,self.y
 			make_part(small_blast_cls,x+1,y+1)
-			-- todo: move to die override
 			do_async(function()
 				wait_async(4)
 				map_set(x,y,74)
@@ -1259,17 +1185,13 @@ function make_static_turret(x,y)
 				end)
 			end
 		end
-	}
-	return make_npc(turret,x,y,0,"turret")
+	},x,y)
 end
 
 -- hidden missile silo
 function make_msl_silo(x,y)
 	local hidden=true
-	local turret={
-		sh=8,
-		sw=8,
-		hp=1,
+	return make_npc("silo",{
 		draw=function()
 			-- built-in map
 		end,
@@ -1295,23 +1217,16 @@ function make_msl_silo(x,y)
 					-- hidden=true
 				end)
 			end
-		end
-	}
-	return make_npc(turret,x,y,0,"silo")
+		end		
+	},x,y)
 end
 
 -- missile
 function make_msl(x,y)
 	-- get direction
-	local ttl,dz,angle=0,0.1,atan2(plyr.x-x+0.5,-plyr.y+y+0.5)
+	local ttl,dz,angle=0,0.4,atan2(plyr.x-x+0.5,-plyr.y+y+0.5)
 
-	local msl={
-		sw=8,
-		sh=8,
-		w=0.4,
-		h=0.4,
-		acc=0.2,
-		friction=1,
+	return make_npc("msl",{
 		collide=function() end,
 		control=function(self) 
 			ttl+=1
@@ -1327,25 +1242,13 @@ function make_msl(x,y)
 			dz+=gravity
 			return true,angle 
 		end
-	}
-	return make_npc(msl,x,y,0,"msl")
+	},x,y)
 end
 
 function make_homing_msl(x,y,angle)
 	-- get direction
 	local ttl,angle_ttl,acc,toward=40,20,0.4,make_lerp_angle(angle,0.05)
-	local msl={
-		w=0.4,
-		h=0.4,
-		sw=8,
-		sh=8,
-		uv={
-			1,2,
-			2,2,
-			2,3,
-			1,3},
-		acc=0.04,
-		friction=0.87,
+	return make_npc("homing_msg",{
 		collide=function() end,
 		control=function(self) 
 			ttl-=1
@@ -1358,8 +1261,7 @@ function make_homing_msl(x,y,angle)
 			end
 			return true,angle 
 		end
-	}
-	return make_npc(msl,x,y,0,"homing msl")
+	},x,y)
 end
 
 -->8
@@ -1535,7 +1437,7 @@ function play_state()
 	local coins,hi_score=max(dget(0),1),dget(1)
 
 	-- todo: time to complete from level (+ difficulty)
-	local score,lives,ttl,dead_state,msgs=0,3,90*30
+	local score,lives,ttl,dead_state,msgs=0,2,90*30
 	-- reset
 	_npcs,_parts,_bullets,_blasts,_turrets={},{},{},{},0
 	-- exit path
@@ -1650,7 +1552,7 @@ function play_state()
 			cam_update()
 
 			if _turrets==0 then
-				_state=exit_level_state(score,hi_score,lives,ttl,exit_path)
+				_state=exit_level_state(score,lives,ttl,exit_path)
 				return
 			end
 
@@ -1677,6 +1579,8 @@ function play_state()
 					wait_async(30)
 					msgs=nil
 					plyr:reset()
+					-- gives a couple of frames to move
+					wait_async(10)
 					dead_state=nil
 				end)
 			end
@@ -1748,6 +1652,9 @@ function exit_level_state(score,lives,ttl,path)
 	local wp={x=path[1].x+d*n.x,y=path[1].y+d*n.y,next=path[2]}
 	-- exit level animation
 	do_async(function()
+		-- wait some bit
+		wait_async(60)
+
 		-- go to waypoint	
 		local dx,dy
 		while wp do
