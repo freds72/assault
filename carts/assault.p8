@@ -38,17 +38,20 @@ function picknext(a,spd)
 end
 
 -- return shortest angle to target
+function shortest_angle(target_angle,angle)
+	local dtheta=target_angle-angle
+	if dtheta>0.5 then
+		angle+=1
+	elseif dtheta<-0.5 then
+		angle-=1
+	end
+	return angle
+end
 function make_lerp_angle(angle,pow)
 	return function(x0,y0,x1,y1)
 		local target_angle=atan2(x1-x0,-y1+y0)
 		-- shortest angle
-		local dtheta=target_angle-angle
-		if dtheta>0.5 then
-			angle+=1
-		elseif dtheta<-0.5 then
-			angle-=1
-		end
-		angle=lerp(angle,target_angle,pow)
+		angle=lerp(shortest_angle(target_angle,angle),target_angle,pow)
 		return angle
 	end
 end
@@ -68,21 +71,20 @@ end
 
 local dither_pat=json_parse'[0b1111111111111111,0b0111111111111111,0b0111111111011111,0b0101111111011111,0b0101111101011111,0b0101101101011111,0b0101101101011110,0b0101101001011110,0b0101101001011010,0b0001101001011010,0b0001101001001010,0b0000101001001010,0b0000101000001010,0b0000001000001010,0b0000001000001000,0b0000000000000000]'
 
--- credits:
+-- credits: http://kometbomb.net/pico8/fadegen.html
 local fadetable=json_parse'[[5,13],[13,6],[13,6],[13,6],[14,15],[13,6],[6,7],[7,7],[14,14],[10,15],[10,15],[11,6],[12,6],[6,6],[14,15],[15,7]]'   
 function fade(i)
+	i=flr(i+1)
 	for c=0,15 do
-		if flr(i+1)>=3 then
+		if i>=3 then
 			pal(c,7,1)
 		else
-			pal(c,fadetable[c+1][flr(i+1)],1)
+			pal(c,fadetable[c+1][i],1)
 		end
 	end
 end
 
 -- coroutine helpers
-
--- delayed functions
 local _futures,_co_id={},0
 -- registers a new coroutine
 function do_async(fn)
@@ -821,6 +823,8 @@ function make_npc(name,base,x,y,angle)
 		{x=0,y=0,ix=-w,iy=h}
 	}
 
+	local state_index,state_async=1
+
 	return add(base.dst or _npcs,setmetatable(base,{
 		-- sub-classing
 		__index={
@@ -828,6 +832,49 @@ function make_npc(name,base,x,y,angle)
 		x=x,
 		y=y,
 		z=0,
+		-- states
+		seek_state=function(self)
+			local target_angle=rnd()
+			-- if close enough, lock on player
+			local x,y,px,py=self.x,self.y,plyr.x,plyr.y
+			if dist(x,y,px,py)<8 then
+				target_angle=atan2(px-x,-py+y)
+			end
+			return function()
+				for i=1,10 do
+					angle=lerp(shortest_angle(target_angle,angle),target_angle,0.1)
+					--self.state=think.."\n"..angle.."\n"..target_angle
+					yield()
+				end
+			end
+		end,
+		move_state=function(self)
+			return function()
+				for i=1,10+rnd() do
+					acc+=self.acc
+					yield()
+				end
+			end
+		end,
+		wait_state=function(self)
+			return function()
+				wait_async(5+rnd(10))
+			end
+		end,
+		fire_state=function(self)
+			return function()
+				local x,y,px,py=self.x,self.y,plyr.x,plyr.y
+				local d=dist(x,y,px,py)
+				if d>4 and d<8 then
+					local target_angle=atan2(px-x,-py+y)
+					local angle=shortest_angle(target_angle,angle)
+					if abs(target_angle-angle)<0.1 then
+						--self.state="fire: "..abs(target_angle-angle)
+						self:fire(angle)
+					end
+				end
+			end
+		end,
 		draw=function(self,x0,y0,z0,a0)
 			local ca,sa=cos(a0),-sin(a0)
 			local x1,y1=self.x-x0,self.y-y0
@@ -893,6 +940,24 @@ function make_npc(name,base,x,y,angle)
 		update=function(self)
 			hit_t-=1
 
+			if self.states then
+				if not state_async then
+					-- 
+					local states=self.states
+					state_async=cocreate(self[states[state_index+1].."_state"](self))
+					state_index=(state_index+1)%#states				
+				else
+					local cs=costatus(state_async)
+					if cs=="suspended" then
+						assert(coresume(state_async))
+					elseif cs=="dead" then
+						state_async=nil
+					end	
+				end
+			end
+
+			-- angle override?
+			assert(self.control,"missing control handler for:"..name)
 			local move,target_angle=self:control()
 			if target_angle then
 				angle=target_angle
@@ -901,7 +966,6 @@ function make_npc(name,base,x,y,angle)
 				-- prev pos
 				_npc_map[to_npc_map(self.x,self.y)]=nil
 
-				acc+=self.acc
 				local dx,dy=acc*cos(angle),-acc*sin(angle)
 
 				-- update pos
@@ -960,94 +1024,19 @@ end
 function make_tank(x,y)
 	local angle,reload_ttl,states,state=0,25
 	
-	local function fire_bullet(self)
-		if reload_ttl<0 and self.visible then
-			local ca,sa=cos(angle),-sin(angle)
-			make_bullet(small_bullet_cls,self.x+ca,self.y+sa,0,ca/2,sa/2)
-			
-			reload_ttl=25
-		end
-	end
-
-	states={
-		-- rotate
-		function(self)
-			local ttl,target_angle=10,angle+0.25-rnd(0.5)
-			local think="?"
-			-- if close enough, lock on player
-			local x,y,px,py=self.x,self.y,plyr.x,plyr.y
-			if dist(x,y,px,py)<8 then
-				target_angle=atan2(px-x,-py+y)
-				-- shortest angle
-				local dtheta=target_angle-angle
-				if dtheta>0.5 then
-					angle+=1
-				elseif dtheta<-0.5 then
-					angle-=1
-				end				
-				think="☉"
-			end
-
-			return function()
-				ttl-=1
-				if(ttl<0) state=rnd(states)(self)
-				angle=lerp(angle,target_angle,0.1)
-				--self.state=think.."\n"..angle.."\n"..target_angle
-				return false,angle
-			end
-		end,
-		-- move
-		function(self)
-			local ttl=10+rnd(10)
-			return function()
-				ttl-=1
-				if(ttl<0) state=rnd(states)(self)
-				return true,angle
-			end
-		end,
-		-- wait
-		function(self)
-			local ttl=5+rnd(10)
-			return function()
-				ttl-=1
-				if(ttl<0) state=rnd(states)(self)
-				return false,angle
-			end
-		end,
-		-- fire
-		function(self)
-			return function()
-				local x,y,px,py=self.x,self.y,plyr.x,plyr.y
-				local d=dist(x,y,px,py)
-				if d>4 and d<8 then
-					local target_angle,angle=atan2(px-x,-py+y),angle
-					-- shortest angle
-					local dtheta=target_angle-angle
-					if dtheta>0.5 then
-						angle+=1
-					elseif dtheta<-0.5 then
-						angle-=1
-					end	
-					if abs(target_angle-angle)<0.1 then
-						--self.state="fire: "..abs(target_angle-angle)
-						fire_bullet(self)
-					end
-				end
-				state=rnd(states)(self)
-			end
-		end
-	}
-
 	return make_npc("tank",{
-		control=function(self)
-			reload_ttl-=1
-			-- idle and visible?
-			if not state and self.visible then
-				state,reload_ttl=rnd(states)(self),30
+		states={"move","seek","fire"},
+		control=function()
+			return true
+		end,
+		fire=function(self,angle)
+			if reload_ttl<0 and self.visible then
+				local ca,sa=cos(angle),-sin(angle)
+				make_bullet(small_bullet_cls,self.x+ca,self.y+sa,0,ca/2,sa/2)		
+				reload_ttl=25
 			end
-			if(state) return state(self)
 		end
-		},x,y)
+	},x,y)
 end
 
 function make_heavy_tank(x,y)
@@ -1306,6 +1295,9 @@ function map_set(i,j,s)
 end
 
 function draw_map(x,y,z,a)
+	-- blinking lights
+	pal(8,picknext(red_blink,0.5)) 
+
 	local ca,sa=cos(a),-sin(a)
 	local scale=8/(z+8)
 	-- project all potential tiles
@@ -1399,8 +1391,9 @@ function draw_map(x,y,z,a)
 	palt(3,true)
 	for _,crater in ipairs(_blasts) do
 		crater:draw(x,y,z,a)
-	end	
-	palt()
+	end
+	-- reset palette changes
+	pal()
 end
 
 -->8
@@ -1522,10 +1515,7 @@ function play_state()
 		draw=function()
 			local px,py,pz,pangle=plyr:get_pos()
 
-			-- blinking lights
-			pal(8,picknext(red_blink,0.5)) 
 			draw_map(px,py,pz,pangle)
-			pal()
 
 			-- draw
 			for _,npc in ipairs(_npcs) do
@@ -1659,13 +1649,7 @@ function exit_level_state(score,lives,ttl,path)
 		local dx,dy
 		while wp do
 			local target_angle=atan2(wp.x-x,-wp.y+y)+0.25
-			-- shortest angle
-			local dtheta=target_angle-angle
-			if dtheta>0.5 then
-				angle+=1
-			elseif dtheta<-0.5 then
-				angle-=1
-			end	
+			angle=shortest_angle(target_angle,angle)
 
 			-- rotate toward
 			while(abs(angle-target_angle)>0.01) do
@@ -1712,9 +1696,7 @@ function exit_level_state(score,lives,ttl,path)
 	return {
 		draw=function()
 			if z>-8 then
-				pal(8,picknext(red_blink,5.3)) 
 				draw_map(x,y,z,angle)
-				pal()
 			end
 
 			spr(sprite,56,fly_mode and 108 or 106,2,fly_mode and 1 or 2)
