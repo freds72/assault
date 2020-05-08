@@ -1,12 +1,20 @@
 {
   "msl": {
+    "u":7,
     "sw": 8,
     "sh": 8,
     "w": 0.4,
     "h": 0.4,
-    "acc": 0.02,
-    "friction": 1
-  },
+    "explode":"msl_explode"
+  },  
+  "nuke": {
+    "u":10,
+    "sw": 8,
+    "sh": 8,
+    "w": 0.4,
+    "h": 0.4,
+    "explode":"nuke_explode"
+  },  
   "tank": {
     "w": 0.4,
     "h": 0.4,

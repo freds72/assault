@@ -206,7 +206,6 @@ function make_plyr(x,y,z,angle)
 	-- player-specific particles
 	-- regular bullet
 	local bullet_cls=with_hitmask(json_parse'{"ttl":30,"ssx":16,"ssy":56,"sw":8,"sh":8,"kind":0,"side":2}')
-	local nuke_shell_cls=json_parse'{"ttl":90,"ssx":16,"ssy":48,"sw":8,"sh":8,"kind":1}'
 
 	-- nuke marker
 	local marker_cls=json_parse'{"ttl":20,"kind":3}'
@@ -223,8 +222,7 @@ function make_plyr(x,y,z,angle)
 		if btn(5) and reload_nuke_ttl<0 then
 			-- polar coords
 			local cm,sm=nuke_v*cos(mortar_angle),-nuke_v*sin(mortar_angle)
-			local ca,sa=cm*cos(angle),cm*sin(angle)
-			make_part(nuke_shell_cls,x,y,z,-sa,-ca,sm)
+			make_msl("nuke",x,y,z,cm,angle-0.25,sm)
 			-- next nuke
 			reload_nuke_ttl=ttl
 			sfx(4)
@@ -233,6 +231,7 @@ function make_plyr(x,y,z,angle)
 			local d=b*b-4*a*c
 			if d>=0 then
 				local t=(-b-sqrt(d))/a/2
+				local ca,sa=cm*cos(angle),cm*sin(angle)
 				make_part(marker_cls,x-t*sa,y-t*ca)
 			end
 		end
@@ -574,18 +573,6 @@ function update_parts(parts)
 			goto continue
 ::die::
 			parts[i]=nil
-		-- nuke
-		elseif p.kind==1 then
-			p.x+=p.dx
-			p.y+=p.dy
-			p.z+=p.dz
-			-- gravity
-			p.dz+=gravity
-			if p.z<=0 then
-				local x,y=p.x,p.y
-				do_async(function() make_nuke(x,y) end)
-				parts[i]=nil
-			end
 		end
 ::continue::
 	end
@@ -785,7 +772,21 @@ heavy_tank_sprite=with_hitmask(make_sprite(182,32,16))
 msl_tank_sprite=with_hitmask(make_sprite(178,32,16))
 heavy_turret_sprite=with_hitmask(make_sprite(76,32,24))
 
-_npc_templates=json_parse'{"msl":{"sw":8,"sh":8,"w":0.4,"h":0.4,"acc":0.02,"friction":1},"tank":{"w":0.4,"h":0.4,"sprite":"light_tank_sprite","uv":[0,0,2,0,2,2,0,2],"hp":1,"acc":0.008,"friction":0.9,"side":1,"score":10},"heavy_tank":{"w":0.8,"h":0.8,"sprite":"heavy_tank_sprite","uv":[0,3,4,3,4,5,0,5],"hp":10,"acc":0.002,"side":1,"score":50},"msl_tank":{"w":0.8,"h":0.8,"sprite":"msl_tank_sprite","uv":[4,3,8,3,8,5,4,5],"hp":8,"side":1,"score":50},"heavy_turret":{"uv":[2,0,6,0,6,3,2,3],"hp":20,"side":1,"score":500,"sprite":"heavy_turret_sprite"},"crater":{"sh":16,"sw":16,"uv":[7,1,9,1,9,3,7,3]},"turret":{"sh":16,"sw":16,"hp":1,"side":1,"score":10},"silo":{"sh":8,"sw":8},"homing_msl":{"w":0.4,"h":0.4,"sw":8,"sh":8,"uv":[1,2,2,2,2,3,1,3],"acc":0.04,"friction":0.87}}'
+-- special handlers
+function msl_explode(self)
+	-- near player?
+	if dist(self.x,self.y,plyr.x,plyr.y)<2 then
+		plyr:hit()
+	end
+	self:die()
+end
+function nuke_explode(self)
+	make_nuke(self.x,self.y)
+	self.dead=true
+end
+
+-- npc templates
+_npc_templates=json_parse'{"msl":{"u":7,"sw":8,"sh":8,"w":0.4,"h":0.4,"explode":"msl_explode"},"nuke":{"u":10,"sw":8,"sh":8,"w":0.4,"h":0.4,"explode":"nuke_explode"},"tank":{"w":0.4,"h":0.4,"sprite":"light_tank_sprite","uv":[0,0,2,0,2,2,0,2],"hp":1,"acc":0.008,"friction":0.9,"side":1,"score":10},"heavy_tank":{"w":0.8,"h":0.8,"sprite":"heavy_tank_sprite","uv":[0,3,4,3,4,5,0,5],"hp":10,"acc":0.002,"side":1,"score":50},"msl_tank":{"w":0.8,"h":0.8,"sprite":"msl_tank_sprite","uv":[4,3,8,3,8,5,4,5],"hp":8,"side":1,"score":50},"heavy_turret":{"uv":[2,0,6,0,6,3,2,3],"hp":20,"side":1,"score":500,"sprite":"heavy_turret_sprite"},"crater":{"sh":16,"sw":16,"uv":[7,1,9,1,9,3,7,3]},"turret":{"sh":16,"sw":16,"hp":1,"side":1,"score":10},"silo":{"sh":8,"sw":8},"homing_msl":{"w":0.4,"h":0.4,"sw":8,"sh":8,"uv":[1,2,2,2,2,3,1,3],"acc":0.04,"friction":0.87}}'
 
 -- returns true if npc area is occupied
 function solid_npc(a,dx,dy)
@@ -799,7 +800,6 @@ end
 
 function make_npc(name,base,x,y,angle)
 	local acc,hit_t=0,0
-	angle=angle or 0
 
 	-- retrieve base properties from json metadata
 	for k,v in pairs(_npc_templates[name]) do
@@ -823,7 +823,8 @@ function make_npc(name,base,x,y,angle)
 		{x=0,y=0,ix=-w,iy=h}
 	}
 
-	local state_index,state_async=1
+	-- initialize npc 'AI'
+	local think_async=base.think and cocreate(base.think)
 
 	return add(base.dst or _npcs,setmetatable(base,{
 		-- sub-classing
@@ -832,49 +833,8 @@ function make_npc(name,base,x,y,angle)
 		x=x,
 		y=y,
 		z=0,
-		-- states
-		seek_state=function(self)
-			local target_angle=rnd()
-			-- if close enough, lock on player
-			local x,y,px,py=self.x,self.y,plyr.x,plyr.y
-			if dist(x,y,px,py)<8 then
-				target_angle=atan2(px-x,-py+y)
-			end
-			return function()
-				for i=1,10 do
-					angle=lerp(shortest_angle(target_angle,angle),target_angle,0.1)
-					--self.state=think.."\n"..angle.."\n"..target_angle
-					yield()
-				end
-			end
-		end,
-		move_state=function(self)
-			return function()
-				for i=1,10+rnd() do
-					acc+=self.acc
-					yield()
-				end
-			end
-		end,
-		wait_state=function(self)
-			return function()
-				wait_async(5+rnd(10))
-			end
-		end,
-		fire_state=function(self)
-			return function()
-				local x,y,px,py=self.x,self.y,plyr.x,plyr.y
-				local d=dist(x,y,px,py)
-				if d>4 and d<8 then
-					local target_angle=atan2(px-x,-py+y)
-					local angle=shortest_angle(target_angle,angle)
-					if abs(target_angle-angle)<0.1 then
-						--self.state="fire: "..abs(target_angle-angle)
-						self:fire(angle)
-					end
-				end
-			end
-		end,
+		-- default angle
+		angle=angle or 0,
 		draw=function(self,x0,y0,z0,a0)
 			local ca,sa=cos(a0),-sin(a0)
 			local x1,y1=self.x-x0,self.y-y0
@@ -882,7 +842,7 @@ function make_npc(name,base,x,y,angle)
 			-- position in screen space (map units)
 			x1,y1=z*(ca*x1+sa*y1)+8,z*(-sa*x1+ca*y1)+14
 			
-			ca,sa=cos(angle-a0),-sin(angle-a0)
+			ca,sa=cos(self.angle-a0),-sin(self.angle-a0)
 			local outcode=0xffff
 			for _,g in pairs(quad) do
 				-- rotate in local space
@@ -901,6 +861,9 @@ function make_npc(name,base,x,y,angle)
 			-- visible?
 			self.visible=false
 			if outcode==0 then
+				if self.z>0 then
+					circfill((x1-self.z/2)<<3,(y1+self.z/2)<<3,4/scale,1)
+				end 
 				-- used to stop firing when not visible!
 				self.visible=true
 				if(hit_t>0) memset(0x5f01,0x7,15) palt(0,true)
@@ -924,7 +887,7 @@ function make_npc(name,base,x,y,angle)
 			do_async(function()
 				wait_async(3)
 				-- leave ground mark
-				make_npc("crater",{dst=_blasts},x,y,angle)
+				make_npc("crater",{dst=_blasts},x,y,self.angle)
 			end)
 			self.dead=true
 		end,
@@ -937,65 +900,59 @@ function make_npc(name,base,x,y,angle)
 				return
 			end
 		end,
+		move=function(self)
+			-- prev pos
+			local x,y=self.x,self.y
+			_npc_map[to_npc_map(x,y)]=nil
+
+			assert(self.acc,"missing acc:"..name)
+			acc+=self.acc
+			local dx,dy=acc*cos(self.angle),-acc*sin(self.angle)
+
+			-- update pos
+			local xarea,yarea=get_area(self,dx,0),get_area(self,0,dy)
+			local xother,yother=solid_npc(self,dx,0),solid_npc(self,0,dy)
+
+			-- solid?
+			if not xother and band(xarea,0x1)==0 then
+				x+=dx
+			else
+				acc=0
+			end
+			if not yother and band(yarea,0x1)==0 then
+				y+=dy
+			else
+				acc=0
+			end
+			_npc_map[to_npc_map(x,y)]=true
+			-- commit 
+			self.x=x
+			self.y=y
+			-- friction
+			acc*=self.friction
+		end,
 		update=function(self)
 			hit_t-=1
 
-			if self.states then
-				if not state_async then
-					-- 
-					local states=self.states
-					state_async=cocreate(self[states[state_index+1].."_state"](self))
-					state_index=(state_index+1)%#states				
-				else
-					local cs=costatus(state_async)
-					if cs=="suspended" then
-						assert(coresume(state_async))
-					elseif cs=="dead" then
-						state_async=nil
-					end	
-				end
-			end
-
-			-- angle override?
-			assert(self.control,"missing control handler for:"..name)
-			local move,target_angle=self:control()
-			if target_angle then
-				angle=target_angle
-			end
-			if move then
-				-- prev pos
-				_npc_map[to_npc_map(self.x,self.y)]=nil
-
-				local dx,dy=acc*cos(angle),-acc*sin(angle)
-
-				-- update pos
-				local xarea,yarea=get_area(self,dx,0),get_area(self,0,dy)
-				local xother,yother=solid_npc(self,dx,0),solid_npc(self,0,dy)
-	
-				-- solid?
-				if not xother and band(xarea,0x1)==0 then
-					self.x+=dx
-				else
-					acc=0
-				end
-				if not yother and band(yarea,0x1)==0 then
-					self.y+=dy
-				else
-					acc=0
-				end
-				_npc_map[to_npc_map(self.x,self.y)]=true
-
-				-- friction
-				acc*=self.friction
+			if think_async then
+				local cs=costatus(think_async)
+				if cs=="suspended" then
+					assert(coresume(think_async,self))
+				elseif cs=="dead" then
+					think_async=nil
+					-- mark npc for removal
+					self.dead=true
+				end	
 			end
 		end,
 		collide=function(self,p)
 			-- to npc base
 			local px,py=p.x-self.x,p.y-self.y
 			-- rotate
-			local ca,sa=cos(angle),-sin(angle)
+			local ca,sa=cos(self.angle),-sin(self.angle)
 			px,py=ca*px+sa*py,-sa*px+ca*py
 			
+			-- todo: still needed? review tmp table
 			local col,a,b,x0,y0,y1=collide(
 				base.sprite,
 				{sx=8*px-4,sy=8*py-4,sw=8,sh=8,hitmask=p.hitmask})
@@ -1022,18 +979,45 @@ end
 -- npc classes
 
 function make_tank(x,y)
-	local angle,reload_ttl,states,state=0,25
-	
 	return make_npc("tank",{
-		states={"move","seek","fire"},
-		control=function()
-			return true
-		end,
-		fire=function(self,angle)
-			if reload_ttl<0 and self.visible then
-				local ca,sa=cos(angle),-sin(angle)
-				make_bullet(small_bullet_cls,self.x+ca,self.y+sa,0,ca/2,sa/2)		
-				reload_ttl=25
+		angle=rnd(),
+		think=function(self)
+			while true do
+				local target_angle,angle_spd=rnd(),0.02
+				-- if close enough, lock on player
+				local x,y,px,py=self.x,self.y,plyr.x,plyr.y
+				if dist(x,y,px,py)<8 then
+					angle_spd=0.1
+					target_angle=atan2(px-x,-py+y)
+				end
+				-- rotate
+				for i=1,10 do
+					self.angle=lerp(shortest_angle(target_angle,self.angle),target_angle,angle_spd)
+					yield()
+				end
+				-- move
+				for i=1,10+rnd() do
+					self:move()
+					yield()
+				end
+				wait_async(5+rnd(10))
+				-- fire
+				if self.visible then
+					-- refresh pos
+					local x,y,px,py=self.x,self.y,plyr.x,plyr.y
+					local d=dist(x,y,px,py)
+					if d>4 and d<8 then
+						local target_angle=atan2(px-x,-py+y)
+						local angle=shortest_angle(target_angle,self.angle)
+						if abs(target_angle-angle)<0.1 then
+							--self.state="fire: "..abs(target_angle-angle)
+										
+							local ca,sa=cos(angle),-sin(angle)
+							make_bullet(small_bullet_cls,x+ca,y+sa,0,ca/2,sa/2)		
+							wait_async(20)
+						end
+					end
+				end
 			end
 		end
 	},x,y)
@@ -1044,9 +1028,6 @@ function make_heavy_tank(x,y)
 	local dx,dy=0,0
 
 	return make_npc("heavy_tank",{
-		control=function()
-			return false,0
-		end
 	},x,y)
 end
 
@@ -1070,18 +1051,21 @@ function make_msl_tank(x,y)
 		end
 	},x,y)
 end
- 
+
+_turret_locks={}
 function make_heavy_turret(x,y)
 	local toward=make_lerp_angle(0,0.1)
-	local reload_delay,reload_ttl=_turrets*40
+	local id=_turrets
 	-- records total number of turrets
 	-- used to terminate current level
 	_turrets+=1
 
 	return make_npc("heavy_turret",{
+		angle=0,
 		die=function(self)
 			_turrets-=1
 			self.dead=true
+			_turret_locks[self]=nil
 			local x,y=self.x,self.y
 			make_part(large_blast_cls,x,y)
 			do_async(function()
@@ -1097,41 +1081,43 @@ function make_heavy_turret(x,y)
 				end
 			end)
 		end,
-		control=function(self)
-			-- account for turret size
-			local x,y=self.x,self.y
-			local angle=toward(x,y,plyr.x,plyr.y)
-			-- close enough?
-			-- todo: move activate as a shared property
-			if not reload_ttl and dist(x,y,plyr.x,plyr.y)<20 then
-				reload_ttl=reload_delay
-			end
-			-- not active
-			if(not reload_ttl) return false,angle
-
-			reload_ttl-=1
-			if reload_ttl<0 then
-				reload_ttl=40
-				local ca,sa=cos(angle),-sin(angle)
-				-- center position
-				local w,cx,cy=1.5/3,x+2*ca,y+2*sa
-				for i=-1,1 do
-					do_async(function()
-						wait_async((i+1)*10)
-						-- still valid?
-						if(self.hp<=0) return 
+		toward_async=function(self,t)
+			for i=1,t do
+				self.angle=toward(x,y,plyr.x,plyr.y)
+				yield()
+			end			
+		end,
+		think=function(self)
+			while true do
+				self:toward_async(20)
+				-- fire!
+				if dist(x,y,plyr.x,plyr.y)<20 then
+					-- pending turrets
+					local t=0
+					for _,_ in pairs(_turret_locks) do
+						t+=40
+					end
+					-- lock
+					_turret_locks[self]=true
+					-- wait current active turret(s)
+					self:toward_async(t)
+					local ca,sa=cos(self.angle),-sin(self.angle)
+					-- center position
+					local w,cx,cy=1.5/3,x+2*ca,y+2*sa
+					for i=-1,1 do
 						make_bullet(large_bullet_cls,cx-i*sa*w,cy+i*ca*w,0,0.12*ca,0.12*sa)				
-					end)
+						wait_async(10)
+					end
+					-- release lock
+					_turret_locks[self]=nil
 				end
 			end
-			return false,angle
-		end	
+		end
 	},x,y)
 end
 
 -- static 4 direction turret
 function make_static_turret(x,y)
-	local reload_ttl=0,0
 	return make_npc("turret",{
 		draw=function()
 			-- built-in map
@@ -1155,23 +1141,20 @@ function make_static_turret(x,y)
 			-- todo: account for bullet thickness
 			return dx*dx+dy*dy<2
 		end,
-		control=function(self)
-			reload_ttl-=1
-			-- close enough?
-			if reload_ttl<0 and dist(x,y,plyr.x,plyr.y)<13 then
-				reload_ttl=30
-				do_async(function()
+		think=function(self)
+			while true do
+				-- close enough?
+				if dist(x,y,plyr.x,plyr.y)<13 then
 					for i=1,4 do
 						wait_async(3)
-						-- still alive?
-						if(self.hp<=0) return						
 						sfx(5)
 						for i=0,0.75,0.25 do
 							local ca,sa=cos(i),-sin(i)
 							make_bullet(small_bullet_cls,x+0.5*ca+1,y+0.5*sa+1,0,0.2*ca,0.2*sa)				
 						end
 					end
-				end)
+				end
+				wait_async(20)
 			end
 		end
 	},x,y)
@@ -1179,7 +1162,6 @@ end
 
 -- hidden missile silo
 function make_msl_silo(x,y)
-	local hidden=true
 	return make_npc("silo",{
 		draw=function()
 			-- built-in map
@@ -1190,48 +1172,54 @@ function make_msl_silo(x,y)
 		-- cannot collide with
 		collide=function()
 		end,
-		control=function(self)
-			-- close enough?
-			if hidden and dist(x,y,plyr.x,plyr.y)<12 then
-				hidden=nil
-				do_async(function()
-					-- display silo
-					for i=0,2 do
-						map_set(self.x,self.y,163+i)
-						wait_async(5)
-					end
-					-- fire msl
-					make_msl(self.x+0.5,self.y+0.5)
-					-- debug
-					-- hidden=true
-				end)
+		think=function(self)
+			-- wait
+			while dist(x,y,plyr.x,plyr.y)>12 do
+				yield()
 			end
+			-- display silo
+			for i=0,2 do
+				map_set(x,y,163+i)
+				wait_async(5)
+			end
+			-- fire msl
+			make_msl("msl",x+0.5,y+0.5,0,0.4,atan2(plyr.x-x+0.5,-plyr.y+y+0.5),0.2)
 		end		
 	},x,y)
 end
 
 -- missile
-function make_msl(x,y)
-	-- get direction
-	local ttl,dz,angle=0,0.4,atan2(plyr.x-x+0.5,-plyr.y+y+0.5)
-
-	return make_npc("msl",{
+function make_msl(base,x,y,z,dz,angle,acc)
+	local ca,sa=cos(angle),-sin(angle)
+	local msl=make_npc(base,{
 		collide=function() end,
-		control=function(self) 
-			ttl+=1
-			local du=min(2,flr(ttl/15))
-			-- todo: z/dz
-			self.uv={
-				6+du,0,
-				7+du,0,
-				7+du,1,
-				6+du,1}
-			self.z+=dz
-			if(ttl<0 or self.z<0) self:die() return
-			dz+=gravity
-			return true,angle 
+		think=function(self)
+			repeat 
+				-- base coord is 'flat' sprite
+				local u=self.u
+				if dz>0.1 then u-=1
+				elseif dz<-0.1 then u+=1
+				end 
+				-- shift texture
+				self.uv={
+					u,0,
+					u+1,0,
+					u+1,1,
+					u,1}
+				self.x+=acc*ca
+				self.y+=acc*sa
+				self.z+=dz
+				dz+=0.5*gravity
+				yield()
+			until self.z<0
+			self.z=0
+			-- die handler
+			self:explode() 
 		end
-	},x,y)
+	},x,y,angle)
+	-- initial alttitude
+	msl.z=z or 0
+	return msl
 end
 
 function make_homing_msl(x,y,angle)
@@ -1432,7 +1420,7 @@ function play_state()
 	-- todo: time to complete from level (+ difficulty)
 	local score,lives,ttl,dead_state,msgs=0,2,90*30
 	-- reset
-	_npcs,_parts,_bullets,_blasts,_turrets={},{},{},{},0
+	_npcs,_parts,_bullets,_blasts,_turrets,_turret_locks={},{},{},{},0,{}
 	-- exit path
 	local exit_path={}
 
@@ -1490,10 +1478,10 @@ function play_state()
 		[3]=make_tank,
 		[4]=make_tank,
 		[5]=make_heavy_turret,
-		[17]=make_msl_tank,
-		[18]=make_msl_tank,
-		[19]=make_msl_tank,
-		[20]=make_msl_tank,
+		--[17]=make_msl_tank,
+		--[18]=make_msl_tank,
+		--[19]=make_msl_tank,
+		--[20]=make_msl_tank,
 		[48]=function(x,y,a) plyr=make_plyr(x,y,64,a) end,
 		[49]=make_msl_silo,
 		[50]=function(x,y) exit_path[1]={x=x,y=y} end,
@@ -1505,8 +1493,8 @@ function play_state()
 	for i=1,n do
 		local id,x,y,a=@mem,@(mem+1),@(mem+2),@(mem+3)
 		local fn=actor_factory[id]
-		assert(fn,"unknown actor id:"..id.."@"..x.."/"..y)
-		fn(x,y,a)
+		-- assert(fn,"unknown actor id:"..id.."@"..x.."/"..y)
+		if(fn) fn(x,y,a)
 		mem+=4
 	end
 	assert(plyr,"missing player start pos")
@@ -1602,6 +1590,8 @@ function game_over_state(score,hi_score)
 	dset(1,hi_score)
 	return {
 		update=function()
+			-- time out
+			if(ttl==0) load("#assault_title")
 			if(btnp(2)) selection+=1
 			if(btnp(3)) selection-=1
 			selection=(selection%2+2)%2
@@ -1614,10 +1604,12 @@ function game_over_state(score,hi_score)
 					load("#assault_title")
 				end
 			end
+			ttl-=1
 		end,
 		draw=function()
 			printba(msgs)
 			if(time_t%2==0)printb("█",45,70+selection*10)
+			printb(tostr(ttl\30),60,90)
 			spr(96,56,106,2,2)
 			draw_hud(score,hi_score,0,5000)
 		end
@@ -1808,11 +1800,11 @@ dddddddd3533333333535d33dddddddd111111111ddddddd11111111daaddddddddddddd33333333
 0000000000000000000000000066000000000000000000000000008888800000000000000000000033333333333333330000000557666666666665d7799a7700
 0000000000000000000000000000000000000000000000000000000888000000000000003366677667766776677666330000000057666666666dd56664446600
 0000000000000000000000000000000000000000000000000000000080000000000000003676d776d776d776d7766763000000000766dddddddddd5111111100
-0000000d6000000000056000000000000000000000000000000000000000000000000000d771111111111111111117760000000000ddddddddddddd500000000
-0000090d709000000056760000000000000000000000000000000000000000000000000016d11dd11dd11dd11ddd11d60000000000005dd55551110000000000
-00009a9d69a900000056760000000000000000000000000000000000000000000000000066ddddddddddd4adddddd16600000000000005dd5511100000000000
-0000d5f5df5d00000015650000000000000000000000000080000088888000008000000077dddddddddd149dddddd177000000000000000d5110000000000000
-0000d596795d00000056760000000000000000000000000088000080008000088000000077dddddddddd11dddddd117700000000000000000000000000000000
+0000000d600000000606660000d670000057600000000000000000000000000000000000d771111111111111111117760000000000ddddddddddddd500000000
+0000090d70900000076777600d677700055577000000000000000000000000000000000016d11dd11dd11dd11ddd11d60000000000005dd55551110000000000
+00009a9d69a90000065666d005d66d0005556d000000000000000000000000000000000066ddddddddddd4adddddd16600000000000005dd5511100000000000
+0000d5f5df5d00000d0ddd00005dd000005dd0000000000080000088888000008000000077dddddddddd149dddddd177000000000000000d5110000000000000
+0000d596795d00000000000000000000000000000000000088000080008000088000000077dddddddddd11dddddd117700000000000000000000000000000000
 00006df88fd6000000000000000000000000000000000000888000800080008880000000d6dddddddddddddddddd11d600000000000000000000000000000000
 00056df5dfd65000000cc000dddddddddddddddddddddddd88000080008000088000000066ddddddddddddddddddd16600000000000000000000000000000000
 000fd596795df00000c7cc00d777777dddddddddd7dddddd80000088888000008000000077ddddddddddddddddddd17700000000000000000000000000000000
@@ -1839,27 +1831,27 @@ dddddddd3533333333535d33dddddddd111111111ddddddd11111111daaddddddddddddd33333333
 0000001011100000000000011000000000000110000000000000110110110000000011011011000055555550055555d622112322222222224433334444444444
 000000000000000000000000000000000000000000000000000000000000000000000000000000005525255dd555555d32333322233332333433334443333433
 0000000000000000000000003333333333333333335bbb330000000000000000113333333333333133333311333333111111111111111111dd566666677776dd
-0070000000d70000007000003333333333b5bb3335b5bbb30060000000000000113333333333331133333311333333111111111111111113d56ddd5d5555576d
-0d600000006600000d600000333bb33335577bb351577bbb0d9d00000000000033333333333333113333531133333333333333333333333316d0000000000576
-077760000977777009777d0033566b3335d667b315d887bb9d2d9000000000003333333333333311333333113333333353333333533335331600000000000057
-9fff7f009afffff69a9ff600335d6b3335d667b311d887bb9d4d9000000000003333333333333311333333113333333333533333333333331600000000000057
-066660000966666009666d0033155333315ddbb3151ddbbb19191000000000003333333333333311333533113333333333333333333333331600000000000057
-0d600000006600000d600000333333333315b5331151b5b301010000000000003333333333333311333333113333333333333533533333331600000000000057
-0070000000d7000000700000333333333333333311151b3300000000000000003333333333333311333333113333333333333333333333331600000000000056
+0007000000d70000000700003333333333b5bb3335b5bbb30060000000000000113333333333331133333311333333111111111111111113d56ddd5d5555576d
+00d600000066000000d60000333bb33335577bb351577bbb0d9d00000000000033333333333333113333531133333333333333333333333316d0000000000576
+0077760009777770009777d033566b3335d667b315d887bb9d2d9000000000003333333333333311333333113333333353333333533335331600000000000057
+09fff7f09afffff609a9ff60335d6b3335d667b311d887bb9d4d9000000000003333333333333311333333113333333333533333333333331600000000000057
+0066660009666660009666d033155333315ddbb3151ddbbb19191000000000003333333333333311333533113333333333333333333333331600000000000057
+00d600000066000000d60000333333333315b5331151b5b301010000000000003333333333333311333333113333333333333533533333331600000000000057
+0007000000d7000000070000333333333333333311151b3300000000000000003333333333333311333333113333333333333333333333331600000000000056
 33333333333333330000111010111110011110111ddd1000112222224420022211224100000000003333333333333333000000000000000016000000000000d6
 3333315555dd533300002865656d661005667d6667692000128999997a951999a499a91000000000333333333333333300000000000000001600000000000056
 33331555d567d533000028666dd5d61005667d66676920001289a9a97a944999a499a991000000003333333335b63333000000000000000016000000000000d6
 3331515656667d5300005d66dd55550001667d6677fd1000154a7a7777999999a499a9920000000033333d6331d63333000000000000000016000000000000d6
-33155567d5d667d3000015d655111111551d65df6d1000000151d5d5d499911151559441000000003333db7633d3333300000000000000001700000000000056
+33155567d5d667d3000015d655111111551d65df6d1000000151d5d5d499911151559441000000003333db7633d1333300000000000000001700000000000056
 33155dd65555ddd300000566dd15555706567d67661000000151d5d5d49912444442411000000000333db3b63423333300000000000000001570000000000561
 315555611155d75300000566dd12555760567d67661000000151d5d5d4912499999415d1000000003331db32343333330000000000000000d15766666666661d
-155156111115565300000566dd15555706567d67661000000155544999924999999ad6660000000033331244333333330000000000000000dd111111111111dd
-1151d6d011d6665300000566dd15555760567d6766100000015554499994a999999a677700000000333333333433333333333333333333566633444333333333
+155156111115565300000566dd15555706567d67661000000155544999924999999ad6660000000033111244333333330000000000000000dd111111111111dd
+1151d6d011d6665300000566dd15555760567d6766100000015554499994a999999a677700000000333133333433333333333333333333566633444333333333
 11556ddddd66675300000566dd12555706567d67661000000151d5d5d49aa7999997566d00000000333335643425633333333333333335dddd63344333433333
 1151d76d66667653000005666d15555760567d676d1000000151d5d5d499aa77777745100000000033335db63353b6333333333333435dd67dd6333344443333
-1115556d666d6653000015d6ddddddd1551d65dfd510000001515151529999aaaaa99d4100000000333313d633155333333443344435dd5d6ddd633344433333
-311551551666d53300005d666667661005667d66676d100015442424aa999999a499a99200000000333331133333333333344333445ddd55ddddd63333333333
-3111151557d66533000028666667661005667d6667692000128949497a9aa999a499a9910000000033333333333333333334344335dddddddddddd6333433333
+1115556d666d6653000015d6ddddddd1551d65dfd510000001515151529999aaaaa99d4100000000333313d633155133333443344435dd5d6ddd633344433333
+311551551666d53300005d666667661005667d66676d100015442424aa999999a499a99200000000333311133333133333344333445ddd55ddddd63333333333
+3111151557d66533000028666667661005667d6667692000128949497a9aa999a499a9910000000033333113333333333334344335dddddddddddd6333433333
 331111111dd65333000028656567661005667d6667692000128999997a945999a499a910000000003333333333333333344433335dddddddddddddd633444433
 333111110d6533330000116161666d100d66d16666dd10001124446666410444d144410000000000333333333333333334433335dddddddddddddddd63344433
 0000000033333dddddddddddddd3333300000000000000000000000000000000000000000005ddd100088d82000000003333435ddd8dddddddddd8ddd6334443
@@ -2037,11 +2029,11 @@ b28706cb8128413c446d5f219662a71a0650489ac58fafab82e4aeeb4b60eac1d37b10dec445f9b4
 9c28ace85a62d4ed994a610d1cb5a6e2e3f1a013e23c479f1a7396f19c6a84a5709ae8b26707acc16e62e75809db39cabdad150e44937690a0ccdf8a3241581580141b00c01a0380787500e520ca345d1fa40bd1742c7a51696933d354d0c699d07a0b436278c45680a8340380740f01f02c05f193ded5aaed902cf636a1b32b
 bb5479b340ebbce1520acebf0580b41702fd8a01b6f6dfdc001d5e6c9b50ce98ea1b538c15e84aecda23f2645ab1804f5f83c07a0f81f87502e0dc1c6fbdf8058570af02fb8d1a5033c1b317ad67aa4e9d88b1344490743ef1d7fa93536f8df5bf37d81617c2ff80d2fe09b2d9db4c399b41c7ce35a771701e4fd79b58ac6bfd
 83b0f62826e61cc7990277298554ede56fb68efa9aab0b80efde70e6c56f6c6dadb9b18b7400d11790b8f39e41acd63deec077b8b47412b20941a6f4dec1d413992ea5062d8270c1edf4c3e2e6abd7d8960fbb49c7b45c1bd5d9bb776fecf0c33aef0a4bcff3a92e6f893630f77ef9ddd6741941bd74f0f83c297b2b8dd5f09e
-249076dec1e23c578f2d048fc8793f29e57cb797f31e67cd79bf39e77cf79ff41e87d17a3f49e97d37a7f51ea7d57abf59eb7d77aff61ec7d97b3f69ed7db7b7f71ee7dd7bbf79ef7df7bff81f07e17c3f89f17e37c7f91f27e57cbf99f37e77cffa1f47e97d3fa9f57eb7d7fb0498010140209309a4e27a8142a200426150b8
-64361d0f8844625138a4562a5028970ba5e2fb6c944b8b4864523924962a62781b0da6e37bacb45b934c665339a42d6cb75c2e564b35a2d66b3fa050622c663b2192c261b118b42a65369d4fa8546a553aa556ad57ac566b55bae576bd5fb0586c563b2596cd67b45a6d56bb65b6dd6fb85c6e573ba5d6ed77bc5e6f57bbe5f6
-fd7fc06070583c26170d87c4627158bc66371d8fc86472593ca6572d97cc667359bce6773d9fd068745a3d26974da7d46a755abd66b75dafd86c765b3da6d76db7dc6e775bbde6f77dbfe070785c3e27178dc7e472795cbe67379dcfe8747a5d3ea757add7ec767b5dbee777bddff0786200400011090c00112a0c0001480d00
-01360e0001420e00014e0e0001330f001123100001481100014d1100114f110001411200013b13001154130031571300015e1300014814000149140001591400014e1500013816000142160001471600015c160001581700015c1800315e1900013a1a0001591a00110a1d00110e2000010b2300010d2400010a260001402600
-010d27000143270001482700013e2800010a2a0001102b0001432b0001452f003120310001493100310933003124330001183400310a3600011436000115370001193700011238003109390001223f0001273f0001344100112f420001334500300c4700056d47003255490033734900056d4b00000000000000000000000000
+249076dec1e23c578f2d048fc8793f29e57cb797f31e67cd79bf39e77cf79ff41e87d17a3f49e97d37a7f51ea7d57abf59eb7d77aff61ec7d97b3f69ed7db7b7f71ee7dd7bbf79ef7df7bff81f07e17c3f89f17e37c7f91f27e57cbf99f37e77cffa1f47e97d3fa9f57eb7d7fb0498030140209309a4e27a8142a231988c8008
+64361d0f8844625138a4562d178c454a0512e174bc5f6d9289719924964d2794465e06c369b8deeb2d16e53339a4d66d0e5b2dd7000592cd68b59bd0685438a3198ec80030986c462d129d4fa8546a553aa556ad57ac566b55bae576bd5fb0586c563b2596cd67b45a6d56bb65b6dd6fb85c6e573ba5d6ed77bc5e6f57bbe5f6
+fd7fc06070583c26170d87c4627158bc66371d8fc86472593ca6572d97cc667359bce6773d9fd068745a3d26974da7d46a755abd66b75dafd86c765b3da6d76db7dc6e775bbde6f77dbfe070785c3e27178dc7e472795cbe67379dcfe8747a5d3ea757add7ec767b5dbee777bddff0787c5e3898400011090c00112a0c000148
+0d0001360e0001420e00014e0e0001330f001123100001481100014d1100114f110001411200013b13001154130031571300015e1300014814000149140001591400014e1500013816000142160001471600015c160001581700015c1800315e1900013a1a0001591a00110a1d00110e2000010b2300010d2400010a26000140
+2600010d27000143270001482700013e2800010a2a0001102b0001432b0001452f003120310001493100310933003124330001183400310a3600011436000115370001193700011238003109390001223f0001273f0001344100112f420001334500300c4700056d47003255490033734900056d4b00
 __sfx__
 0007000014553126250f5030e5030e5000c50008401064010440118501165011450113501105010d5010b50108501075010550103501025010150102400023000130003400024000140001400024000240001400
 0002000006743097530a7530975303743017210060102600006000060000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000

@@ -111,7 +111,7 @@ function _draw()
  	pal()
  
  	if landed then
-		if(flr(8*time())%8<4) printb("INSERT COINS",30,80,14) printb("🅾️❎",56,87,2)
+		if(flr(8*time())%8<4) printb("INSERT COINS",30,80) printb("🅾️❎",58,87)
 
 		printb("SCORE",18,0)
 
