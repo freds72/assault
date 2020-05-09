@@ -7,7 +7,8 @@
     "h": 0.4,
     "explode": "msl_explode",
     "hit": "nop",
-    "collide": "nop"
+    "collide": "nop",
+    "blast":"small_blast_cls"
   },
   "nuke": {
     "u": 10,
@@ -35,29 +36,28 @@
       2
     ],
     "hp": 1,
-    "acc": 0.008,
+    "acc": 0.01,
     "friction": 0.9,
     "side": 1,
-    "score": 10
+    "score": 10,
+    "blast":"small_blast_cls"
   },
   "heavy_tank": {
     "w": 0.8,
     "h": 0.8,
     "sprite": "heavy_tank_sprite",
     "uv": [
-      0,
-      3,
-      4,
-      3,
-      4,
-      5,
-      0,
-      5
+      0,3,
+      3,3,
+      3,5,
+      0,5
     ],
     "hp": 10,
-    "acc": 0.002,
+    "acc": 0.01,
+    "friction": 0.85,
     "side": 1,
-    "score": 50
+    "score": 50,
+    "blast":"medium_blast_cls"
   },
   "msl_tank": {
     "w": 0.8,
@@ -74,8 +74,11 @@
       5
     ],
     "hp": 8,
+    "acc": 0.01,
+    "friction": 0.80,
     "side": 1,
-    "score": 50
+    "score": 50,
+    "blast":"medium_blast_cls"
   },
   "heavy_turret": {
     "uv": [
@@ -91,7 +94,8 @@
     "hp": 20,
     "side": 1,
     "score": 500,
-    "sprite": "heavy_turret_sprite"
+    "sprite": "heavy_turret_sprite",
+    "blast":"large_blast_cls"
   },
   "crater": {
     "sh": 16,
@@ -112,7 +116,8 @@
     "sw": 16,
     "hp": 1,
     "side": 1,
-    "score": 10
+    "score": 10,
+    "draw":"nop"
   },
   "silo": {
     "sh": 8,
@@ -141,6 +146,7 @@
     "hp":1,
     "acc": 0.04,
     "collide": "nop",
-    "sprite":"homing_msl_sprite"
+    "sprite":"homing_msl_sprite",
+    "blast":"small_blast_cls"
   }
 }

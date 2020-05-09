@@ -805,7 +805,7 @@ function nuke_explode(self)
 end
 
 -- npc templates
-_npc_templates=json_parse'{"msl":{"u":7,"sw":8,"sh":8,"w":0.4,"h":0.4,"explode":"msl_explode","hit":"nop","collide":"nop"},"nuke":{"u":10,"sw":8,"sh":8,"w":0.4,"h":0.4,"side":2,"explode":"nuke_explode","hit":"nop","collide":"nop"},"tank":{"w":0.4,"h":0.4,"sprite":"light_tank_sprite","uv":[0,0,2,0,2,2,0,2],"hp":1,"acc":0.008,"friction":0.9,"side":1,"score":10,"blast":"small_blast_cls"},"heavy_tank":{"w":0.8,"h":0.8,"sprite":"heavy_tank_sprite","uv":[0,3,3,3,3,5,0,5],"hp":10,"acc":0.002,"friction":0.9,"side":1,"score":50,"blast":"medium_blast_cls"},"msl_tank":{"w":0.8,"h":0.8,"sprite":"msl_tank_sprite","uv":[4,3,8,3,8,5,4,5],"hp":8,"acc":0.002,"friction":0.9,"side":1,"score":50,"blast":"medium_blast_cls"},"heavy_turret":{"uv":[2,0,6,0,6,3,2,3],"hp":20,"side":1,"score":500,"sprite":"heavy_turret_sprite","blast":"large_blast_cls"},"crater":{"sh":16,"sw":16,"uv":[7,1,9,1,9,3,7,3]},"turret":{"sh":16,"sw":16,"hp":1,"side":1,"score":10,"draw":"nop"},"silo":{"sh":8,"sw":8,"hit":"nop","collide":"nop","draw":"nop"},"homing_msl":{"w":0.4,"h":0.4,"sw":8,"sh":8,"uv":[1,2,2,2,2,3,1,3],"nocrater":true,"side":1,"hp":1,"acc":0.04,"collide":"nop","sprite":"homing_msl_sprite"}}'
+_npc_templates=json_parse'{"msl":{"u":7,"sw":8,"sh":8,"w":0.4,"h":0.4,"explode":"msl_explode","hit":"nop","collide":"nop","blast":"small_blast_cls"},"nuke":{"u":10,"sw":8,"sh":8,"w":0.4,"h":0.4,"side":2,"explode":"nuke_explode","hit":"nop","collide":"nop"},"tank":{"w":0.4,"h":0.4,"sprite":"light_tank_sprite","uv":[0,0,2,0,2,2,0,2],"hp":1,"acc":0.01,"friction":0.9,"side":1,"score":10,"blast":"small_blast_cls"},"heavy_tank":{"w":0.8,"h":0.8,"sprite":"heavy_tank_sprite","uv":[0,3,3,3,3,5,0,5],"hp":10,"acc":0.01,"friction":0.85,"side":1,"score":50,"blast":"medium_blast_cls"},"msl_tank":{"w":0.8,"h":0.8,"sprite":"msl_tank_sprite","uv":[4,3,8,3,8,5,4,5],"hp":8,"acc":0.01,"friction":0.80,"side":1,"score":50,"blast":"medium_blast_cls"},"heavy_turret":{"uv":[2,0,6,0,6,3,2,3],"hp":20,"side":1,"score":500,"sprite":"heavy_turret_sprite","blast":"large_blast_cls"},"crater":{"sh":16,"sw":16,"uv":[7,1,9,1,9,3,7,3]},"turret":{"sh":16,"sw":16,"hp":1,"side":1,"score":10,"draw":"nop"},"silo":{"sh":8,"sw":8,"hit":"nop","collide":"nop","draw":"nop"},"homing_msl":{"w":0.4,"h":0.4,"sw":8,"sh":8,"uv":[1,2,2,2,2,3,1,3],"nocrater":true,"side":1,"hp":1,"acc":0.04,"collide":"nop","sprite":"homing_msl_sprite","blast":"small_blast_cls"}}'
 
 -- returns true if npc area is occupied
 function solid_npc(a,dx,dy)
@@ -1506,7 +1506,7 @@ function play_state()
 	end
 
 	local actor_factory={
-		[1]=make_heavy_tank,
+		[1]=make_tank,
 		[5]=make_heavy_turret,
 		[17]=make_msl_tank,
 		[32]=make_heavy_tank,
