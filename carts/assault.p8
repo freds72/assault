@@ -10,6 +10,8 @@ __lua__
 #include includes/tquad.lua
 
 -- misc helper functions
+function nop() end
+
 local shkx,shky=0,0
 function cam_shake()
 	shkx,shky=min(1,shkx+rnd()),min(1,shky+rnd())
@@ -176,7 +178,7 @@ local large_blast_cls=json_parse'{"ttl":30,"kind":7,"r":3,"snd":7}'
 -->8
 -- player
 function make_plyr(x,y,z,angle)
-	local hit_t,reload_ttl,reload_nuke_ttl,acc,da,dz,mortar_angle,underwater=0,0,0,0,0,0,0
+	local hit_t,jump_ttl,reload_ttl,reload_nuke_ttl,acc,da,dz,mortar_angle,underwater=0,0,0,0,0,0,0,0
 	-- threads positions & velocities
 	local lthread,rthread,lthread_acc,rthread_acc=0,0,0,0
 	local states,state,nuke_mode,driving_mode,dead_mode
@@ -214,6 +216,7 @@ function make_plyr(x,y,z,angle)
 		if btn(5) and reload_ttl<0 then
 			make_bullet(bullet_cls,x,y,0,-sa/2,-ca/2)
 			reload_ttl=10
+			-- todo: move to json
 			sfx(0)
 		end
 	end
@@ -281,19 +284,14 @@ function make_plyr(x,y,z,angle)
 				underwater=nil
 				if area==0x2 and abs(acc)>0.1 then
 					cam_shake()
-				-- jumppad
 				elseif area==0x8 then
 					underwater=true
 				elseif band(area,0x4)>0 then
-					local i=flr(x)|flr(y)<<7
-					local j=jumppads[i]
-					-- actvivate
-					if j and j>0 then
+					-- jumppad
+					if jump_ttl<0 and jumppads[flr(x)|flr(y)<<7] then
 						-- push
 						dz=0.6
 						state=states.airborne()
-						-- 
-						jumppads[i]-=1
 					end
 				end
 
@@ -343,6 +341,8 @@ function make_plyr(x,y,z,angle)
 				z+=dz
 				dz+=gravity/5
 				if z<0 then
+					-- next allowed jump
+					jump_ttl=30
 					state=states.drive()
 					return
 				end
@@ -499,7 +499,7 @@ function make_plyr(x,y,z,angle)
 		update=function(self)
 			reload_ttl-=1
 			reload_nuke_ttl-=1
-
+			jump_ttl-=1
 			-- free up previous pos
 			_npc_map[to_npc_map(self.x,self.y)]=nil
 			
@@ -543,9 +543,9 @@ function update_parts(parts)
 		elseif p.kind==0 then
 			local x0,y0=p.x,p.y
 			local x1,y1=x0+p.dx,y0+p.dy
-				
-			-- hit player on ground?
+			
 			if p.side==1 and pz<=0 then
+				-- enemy bullet
 				local x,y=x1-px,y1-py
 				-- top/left corner screen position
 				p.sx=64+((ca*x-sa*y)<<3)-p.sw/2
@@ -555,9 +555,9 @@ function update_parts(parts)
 					goto die
 				end
 			elseif p.side==2 then
-				-- 
+				-- player bullet
 				for _,npc in pairs(_npcs) do
-					if npc:collide(p) then
+					if npc.side==1 and npc:collide(p) then
 						npc:hit(1)
 						goto die
 					end
@@ -566,17 +566,17 @@ function update_parts(parts)
 		
 			-- hit wall?
 			if bullet_solid(x0,y1) or bullet_solid(x1,y0) then
-				parts[i]=nil
 				-- effect
 				make_part({sw=2,c=7,ttl=2+rnd(2),kind=5},x0,y0,1)
+				goto die
 			else
 				p.x=x1
 				p.y=y1
 			end
-			goto continue
-::die::
-			parts[i]=nil
 		end
+		goto continue
+::die::
+		parts[i]=nil
 ::continue::
 	end
 end
@@ -774,6 +774,7 @@ light_tank_sprite=with_hitmask(make_sprite(64,16,16))
 heavy_tank_sprite=with_hitmask(make_sprite(182,32,16))
 msl_tank_sprite=with_hitmask(make_sprite(178,32,16))
 heavy_turret_sprite=with_hitmask(make_sprite(76,32,24))
+homing_msl_sprite=with_hitmask(make_sprite(240,8,8))
 
 -- special handlers
 function msl_explode(self)
@@ -789,7 +790,7 @@ function nuke_explode(self)
 end
 
 -- npc templates
-_npc_templates=json_parse'{"msl":{"u":7,"sw":8,"sh":8,"w":0.4,"h":0.4,"explode":"msl_explode"},"nuke":{"u":10,"sw":8,"sh":8,"w":0.4,"h":0.4,"explode":"nuke_explode"},"tank":{"w":0.4,"h":0.4,"sprite":"light_tank_sprite","uv":[0,0,2,0,2,2,0,2],"hp":1,"acc":0.008,"friction":0.9,"side":1,"score":10},"heavy_tank":{"w":0.8,"h":0.8,"sprite":"heavy_tank_sprite","uv":[0,3,4,3,4,5,0,5],"hp":10,"acc":0.002,"side":1,"score":50},"msl_tank":{"w":0.8,"h":0.8,"sprite":"msl_tank_sprite","uv":[4,3,8,3,8,5,4,5],"hp":8,"side":1,"score":50},"heavy_turret":{"uv":[2,0,6,0,6,3,2,3],"hp":20,"side":1,"score":500,"sprite":"heavy_turret_sprite"},"crater":{"sh":16,"sw":16,"uv":[7,1,9,1,9,3,7,3]},"turret":{"sh":16,"sw":16,"hp":1,"side":1,"score":10},"silo":{"sh":8,"sw":8},"homing_msl":{"w":0.4,"h":0.4,"sw":8,"sh":8,"uv":[1,2,2,2,2,3,1,3],"acc":0.04,"friction":0.87}}'
+_npc_templates=json_parse'{"msl":{"u":7,"sw":8,"sh":8,"w":0.4,"h":0.4,"explode":"msl_explode","hit":"nop","collide":"nop"},"nuke":{"u":10,"sw":8,"sh":8,"w":0.4,"h":0.4,"side":2,"explode":"nuke_explode","hit":"nop","collide":"nop"},"tank":{"w":0.4,"h":0.4,"sprite":"light_tank_sprite","uv":[0,0,2,0,2,2,0,2],"hp":1,"acc":0.008,"friction":0.9,"side":1,"score":10},"heavy_tank":{"w":0.8,"h":0.8,"sprite":"heavy_tank_sprite","uv":[0,3,4,3,4,5,0,5],"hp":10,"acc":0.002,"side":1,"score":50},"msl_tank":{"w":0.8,"h":0.8,"sprite":"msl_tank_sprite","uv":[4,3,8,3,8,5,4,5],"hp":8,"side":1,"score":50},"heavy_turret":{"uv":[2,0,6,0,6,3,2,3],"hp":20,"side":1,"score":500,"sprite":"heavy_turret_sprite"},"crater":{"sh":16,"sw":16,"uv":[7,1,9,1,9,3,7,3]},"turret":{"sh":16,"sw":16,"hp":1,"side":1,"score":10},"silo":{"sh":8,"sw":8,"hit":"nop","collide":"nop","draw":"nop"},"homing_msl":{"w":0.4,"h":0.4,"sw":8,"sh":8,"uv":[1,2,2,2,2,3,1,3],"side":1,"hp":1,"acc":0.04,"score":1,"collide":"nop","sprite":"homing_msl_sprite"}}'
 
 -- returns true if npc area is occupied
 function solid_npc(a,dx,dy)
@@ -864,8 +865,10 @@ function make_npc(name,base,x,y,angle)
 			-- visible?
 			self.visible=false
 			if outcode==0 then
+				-- shadow!!
 				if self.z>0 then
-					circfill((x1-self.z/2)<<3,(y1+self.z/2)<<3,4/scale,1)
+					local z=self.z<<1
+					circfill((x1-z)<<3,(y1+z)<<3,3/scale,1)
 				end 
 				-- used to stop firing when not visible!
 				self.visible=true
@@ -887,20 +890,20 @@ function make_npc(name,base,x,y,angle)
 		die=function(self)
 			local x,y=self.x,self.y
 			make_part(small_blast_cls,x,y)
-			do_async(function()
-				wait_async(3)
-				-- leave ground mark
-				make_npc("crater",{dst=_blasts},x,y,self.angle)
-			end)
+			if not self.nocrater then
+				do_async(function()
+					wait_async(3)
+					-- leave ground mark
+					make_npc("crater",{dst=_blasts},x,y,self.angle)
+				end)
+			end
 			self.dead=true
 		end,
 		hit=function(self,dmg)
 			self.hp-=dmg
-			hit_t=2
+			hit_t=4
 			if self.hp<=0 then
-				-- 
 				self:die()
-				return
 			end
 		end,
 		move=function(self)
@@ -956,6 +959,8 @@ function make_npc(name,base,x,y,angle)
 			px,py=ca*px+sa*py,-sa*px+ca*py
 			
 			-- todo: still needed? review tmp table
+			assert(base.sprite,"no sprite:"..name)
+
 			local col,a,b,x0,y0,y1=collide(
 				base.sprite,
 				{sx=8*px-4,sy=8*py-4,sw=8,sh=8,hitmask=p.hitmask})
@@ -1035,22 +1040,17 @@ function make_heavy_tank(x,y)
 end
 
 function make_msl_tank(x,y)
-	local angle,acc,move_t,reload_ttl=0,0.1,0,0
-	local dx,dy=0,0
-
 	return make_npc("msl_tank",{
-		control=function(self)
-			reload_ttl-=1
-			if reload_ttl<0 then
-				reload_ttl=30
-				do_async(function()
+		think=function(self)
+			while true do
+				wait_async(60)
+				if dist(self.x,self.y,plyr.x,plyr.y)<10 then
 					for i=1,4 do
 						wait_async(5)
-						-- make_homing_msl(self.x,self.y,0)
+						make_homing_msl(self.x,self.y,self.angle)
 					end
-				end)
+				end
 			end
-			return false,0
 		end
 	},x,y)
 end
@@ -1166,15 +1166,6 @@ end
 -- hidden missile silo
 function make_msl_silo(x,y)
 	return make_npc("silo",{
-		draw=function()
-			-- built-in map
-		end,
-		-- cannot be hit
-		hit=function()
-		end,
-		-- cannot collide with
-		collide=function()
-		end,
 		think=function(self)
 			-- wait
 			while dist(x,y,plyr.x,plyr.y)>12 do
@@ -1195,7 +1186,6 @@ end
 function make_msl(base,x,y,z,dz,angle,acc)
 	local ca,sa=cos(angle),-sin(angle)
 	local msl=make_npc(base,{
-		collide=function() end,
 		think=function(self)
 			repeat 
 				-- base coord is 'flat' sprite
@@ -1227,19 +1217,27 @@ end
 
 function make_homing_msl(x,y,angle)
 	-- get direction
-	local ttl,angle_ttl,acc,toward=40,20,0.4,make_lerp_angle(angle,0.05)
-	return make_npc("homing_msg",{
-		collide=function() end,
-		control=function(self) 
-			ttl-=1
-			if(ttl<0) self:die() return
-			
-			angle_ttl-=1
-			-- homing mode?
-			if angle_ttl<0 then 
-				angle=toward(self.x+0.5,self.y+0.5,plyr.x,plyr.y)
+	local toward,acc=make_lerp_angle(angle+rnd(0.16)-0.08,0.08),0.3
+	return make_npc("homing_msl",{
+		move=function(self)
+			acc+=self.acc/512
+			local dx,dy=acc*cos(self.angle),-acc*sin(self.angle)
+			self.x+=dx
+			self.y+=dy
+		end,
+		think=function(self) 
+			-- phase 1: seek
+			for i=1,20 do
+				self.angle=toward(self.x,self.y,plyr.x,plyr.y)
+				self:move()
+				yield()
 			end
-			return true,angle 
+			for i=1,30 do
+				self.acc+=1
+				self:move()
+				yield()
+			end
+			self:die()
 		end
 	},x,y)
 end
@@ -1477,14 +1475,8 @@ function play_state()
 
 	local actor_factory={
 		[1]=make_tank,
-		[2]=make_tank,
-		[3]=make_tank,
-		[4]=make_tank,
 		[5]=make_heavy_turret,
-		--[17]=make_msl_tank,
-		--[18]=make_msl_tank,
-		--[19]=make_msl_tank,
-		--[20]=make_msl_tank,
+		[17]=make_msl_tank,
 		[48]=function(x,y,a) plyr=make_plyr(x,y,64,a) end,
 		[49]=make_msl_silo,
 		[50]=function(x,y) exit_path[1]={x=x,y=y} end,

@@ -1,20 +1,25 @@
 {
   "msl": {
-    "u":7,
+    "u": 7,
     "sw": 8,
     "sh": 8,
     "w": 0.4,
     "h": 0.4,
-    "explode":"msl_explode"
-  },  
+    "explode": "msl_explode",
+    "hit": "nop",
+    "collide": "nop"
+  },
   "nuke": {
-    "u":10,
+    "u": 10,
     "sw": 8,
     "sh": 8,
     "w": 0.4,
     "h": 0.4,
-    "explode":"nuke_explode"
-  },  
+    "side":2,
+    "explode": "nuke_explode",
+    "hit": "nop",
+    "collide": "nop"
+  },
   "tank": {
     "w": 0.4,
     "h": 0.4,
@@ -111,7 +116,10 @@
   },
   "silo": {
     "sh": 8,
-    "sw": 8
+    "sw": 8,
+    "hit": "nop",
+    "collide": "nop",
+    "draw":"nop"
   },
   "homing_msl": {
     "w": 0.4,
@@ -128,7 +136,11 @@
       1,
       3
     ],
+    "nocrater":true,
+    "side":1,
+    "hp":1,
     "acc": 0.04,
-    "friction": 0.87
+    "collide": "nop",
+    "sprite":"homing_msl_sprite"
   }
 }
