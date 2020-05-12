@@ -248,10 +248,10 @@ function make_plyr(x,y,z,angle)
 				end
 
 				-- reduce turn rate if driving while turning
-				local turn_scale=1
+				local turn_scale=0.8
 				-- regular drive
-				if(btn(2)) acc+=0.04 turn_scale=0.7 lthread_acc=1 rthread_acc=1
-				if(btn(3)) acc-=0.04 turn_scale=0.7 lthread_acc=-1 rthread_acc=-1
+				if(btn(2)) acc+=0.04 turn_scale=0.6 lthread_acc=1 rthread_acc=1
+				if(btn(3)) acc-=0.04 turn_scale=0.6 lthread_acc=-1 rthread_acc=-1
 				
 				-- rotation
 				if(btn(0)) da=-0.01 lthread_acc=-turn_scale rthread_acc=turn_scale
@@ -343,7 +343,7 @@ function make_plyr(x,y,z,angle)
 					return
 				end
 						
-				fire_nuke(60)
+				fire_nuke(45)
 
 				-- friction
 				da*=0.9
@@ -359,8 +359,9 @@ function make_plyr(x,y,z,angle)
 
 				-- fast exit from mortar mode
 				if(btn(2)) state=states.drive() return
-				if(btn(3)) mortar_angle+=0.01
-				mortar_angle=mid(mortar_angle*0.95,0,0.2)				
+				local damping=0.8
+				if(btn(3)) mortar_angle+=0.003 damping=1
+				mortar_angle=mid(mortar_angle*damping,0,0.2)				
 				sprite=lerpa(mortar_sprites,mortar_angle/0.2)
 
 				fire_nuke(90)
@@ -801,6 +802,7 @@ function msl_explode(self)
 end
 function nuke_explode(self)
 	make_nuke(self.x,self.y)
+	-- mark for garbage
 	self.dead=true
 end
 
